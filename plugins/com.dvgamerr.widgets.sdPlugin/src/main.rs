@@ -75,7 +75,9 @@ impl openaction::ActionEventHandler for ActionEventHandler {
 			return Ok(());
 		};
 		if kind.scheduled() {
-			runtime::update(&event.context, event.payload.settings);
+			if let Some(image) = runtime::update(&event.context, event.payload.settings) {
+				outbound.set_image(event.context, Some(image), None).await?;
+			}
 			Ok(())
 		} else {
 			local::settings_changed(event.context, kind, &event.payload.settings, outbound).await

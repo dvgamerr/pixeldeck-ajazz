@@ -8,9 +8,12 @@ use tokio::task::JoinHandle;
 
 use crate::{
 	fetch,
-	model::{ActionKind, WidgetData, setting_string},
+	model::{ActionKind, WidgetData, setting_f64, setting_string},
 	render,
 };
+
+const MAX_CACHE_ENTRIES: usize = 128;
+type CacheKey = (ActionKind, String);
 
 struct Entry {
 	kind: ActionKind,
@@ -22,9 +25,16 @@ struct Entry {
 	last_image: Option<String>,
 }
 
+struct CacheEntry {
+	data: WidgetData,
+	last_used: u64,
+}
+
 #[derive(Default)]
 struct Runtime {
 	entries: HashMap<String, Entry>,
+	cache: HashMap<CacheKey, CacheEntry>,
+	cache_clock: u64,
 	worker: Option<JoinHandle<()>>,
 }
 
@@ -35,6 +45,53 @@ struct JobGroup {
 }
 
 static RUNTIME: LazyLock<Mutex<Runtime>> = LazyLock::new(Default::default);
+
+fn cache_key(kind: ActionKind, settings: &SettingsValue) -> CacheKey {
+	(kind, request_key(kind, settings))
+}
+
+fn cached_data(runtime: &mut Runtime, key: &CacheKey) -> Option<WidgetData> {
+	runtime.cache_clock = runtime.cache_clock.wrapping_add(1);
+	let last_used = runtime.cache_clock;
+	runtime.cache.get_mut(key).map(|entry| {
+		entry.last_used = last_used;
+		entry.data.clone()
+	})
+}
+
+fn cache_data(runtime: &mut Runtime, key: CacheKey, data: WidgetData) {
+	runtime.cache_clock = runtime.cache_clock.wrapping_add(1);
+	if !runtime.cache.contains_key(&key)
+		&& runtime.cache.len() >= MAX_CACHE_ENTRIES
+		&& let Some(oldest) = runtime
+			.cache
+			.iter()
+			.min_by_key(|(_, entry)| entry.last_used)
+			.map(|(key, _)| key.clone())
+	{
+		runtime.cache.remove(&oldest);
+	}
+	runtime.cache.insert(
+		key,
+		CacheEntry {
+			data,
+			last_used: runtime.cache_clock,
+		},
+	);
+}
+
+fn initial_frame(
+	runtime: &mut Runtime,
+	kind: ActionKind,
+	settings: &SettingsValue,
+) -> (Option<WidgetData>, String) {
+	let data = cached_data(runtime, &cache_key(kind, settings));
+	let image = data.as_ref().map_or_else(
+		|| render::loading(kind),
+		|data| render::widget(kind, data, settings),
+	);
+	(data, image)
+}
 
 fn ensure_worker(runtime: &mut Runtime) {
 	if runtime
@@ -53,9 +110,9 @@ pub async fn appear(
 	settings: SettingsValue,
 	outbound: &mut OutboundEventManager,
 ) -> EventHandlerResult {
-	let image = render::loading(kind);
-	{
+	let image = {
 		let mut runtime = RUNTIME.lock().unwrap();
+		let (data, image) = initial_frame(&mut runtime, kind, &settings);
 		runtime.entries.insert(
 			context.clone(),
 			Entry {
@@ -64,12 +121,13 @@ pub async fn appear(
 				generation: 0,
 				next_due: Instant::now(),
 				busy: false,
-				data: None,
+				data,
 				last_image: Some(image.clone()),
 			},
 		);
 		ensure_worker(&mut runtime);
-	}
+		image
+	};
 	outbound.set_image(context, Some(image), None).await?;
 	Ok(())
 }
@@ -84,14 +142,17 @@ pub fn disappear(context: &str) {
 	}
 }
 
-pub fn update(context: &str, settings: SettingsValue) {
+pub fn update(context: &str, settings: SettingsValue) -> Option<String> {
 	let mut runtime = RUNTIME.lock().unwrap();
-	if let Some(entry) = runtime.entries.get_mut(context) {
-		entry.settings = settings;
-		entry.generation = entry.generation.wrapping_add(1);
-		entry.next_due = Instant::now();
-		entry.data = None;
-	}
+	let kind = runtime.entries.get(context)?.kind;
+	let (data, image) = initial_frame(&mut runtime, kind, &settings);
+	let entry = runtime.entries.get_mut(context)?;
+	entry.settings = settings;
+	entry.generation = entry.generation.wrapping_add(1);
+	entry.next_due = Instant::now();
+	entry.data = data;
+	entry.last_image = Some(image.clone());
+	Some(image)
 }
 
 pub fn refresh(context: &str) {
@@ -143,6 +204,13 @@ fn request_key(kind: ActionKind, settings: &SettingsValue) -> String {
 			setting_string(settings, "lon", "100.41")
 		),
 		ActionKind::WorkHours => "work-hours".to_owned(),
+		ActionKind::Stock => format!(
+			"{}:{}:{}:{}",
+			setting_string(settings, "symbol", "AAPL").to_uppercase(),
+			setting_string(settings, "displayName", ""),
+			setting_f64(settings, "cost").map_or_else(String::new, |value| value.to_string()),
+			setting_f64(settings, "qty").map_or_else(String::new, |value| value.to_string()),
+		),
 		_ => settings.to_string(),
 	}
 }
@@ -168,30 +236,44 @@ async fn scheduler() {
 async fn finish(context: String, generation: u64, result: Result<WidgetData, String>) {
 	let image = {
 		let mut runtime = RUNTIME.lock().unwrap();
-		let Some(entry) = runtime.entries.get_mut(&context) else {
-			return;
-		};
-		entry.busy = false;
-		if entry.generation != generation {
-			entry.next_due = Instant::now();
-			return;
-		}
-		let image = match result {
-			Ok(data) => {
-				let image = render::widget(entry.kind, &data, &entry.settings);
-				entry.data = Some(data);
-				image
+		let mut cache_update = None;
+		let image = {
+			let Some(entry) = runtime.entries.get_mut(&context) else {
+				return;
+			};
+			entry.busy = false;
+			if entry.generation != generation {
+				entry.next_due = Instant::now();
+				return;
 			}
-			Err(error) => {
-				log::warn!("{:?} refresh failed for {context}: {error}", entry.kind);
-				render::error(&error)
-			}
+			let image = match result {
+				Ok(data) => {
+					let image = render::widget(entry.kind, &data, &entry.settings);
+					cache_update = Some((cache_key(entry.kind, &entry.settings), data.clone()));
+					entry.data = Some(data);
+					Some(image)
+				}
+				Err(error) => {
+					log::warn!("{:?} refresh failed for {context}: {error}", entry.kind);
+					entry.data.is_none().then(|| render::error(&error))
+				}
+			};
+			image.and_then(|image| {
+				if entry.last_image.as_ref() == Some(&image) {
+					None
+				} else {
+					entry.last_image = Some(image.clone());
+					Some(image)
+				}
+			})
 		};
-		if entry.last_image.as_ref() == Some(&image) {
-			return;
+		if let Some((key, data)) = cache_update {
+			cache_data(&mut runtime, key, data);
 		}
-		entry.last_image = Some(image.clone());
 		image
+	};
+	let Some(image) = image else {
+		return;
 	};
 
 	let mut manager = OUTBOUND_EVENT_MANAGER.lock().await;
@@ -205,7 +287,35 @@ async fn finish(context: String, generation: u64, result: Result<WidgetData, Str
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::model::CurrencyData;
 	use serde_json::json;
+
+	#[test]
+	fn cached_frame_replaces_loading_after_context_disappears() {
+		let settings = json!({ "from": "USD", "to": "THB", "interval": 10_000 });
+		let mut runtime = Runtime::default();
+		let (data, first_image) = initial_frame(&mut runtime, ActionKind::Currency, &settings);
+		assert!(data.is_none());
+		assert_eq!(first_image, render::loading(ActionKind::Currency));
+
+		let cached = WidgetData::Currency(CurrencyData {
+			pair: "USDTHB".to_owned(),
+			price: 32.5,
+			change_percent: 0.25,
+		});
+		cache_data(
+			&mut runtime,
+			cache_key(ActionKind::Currency, &settings),
+			cached.clone(),
+		);
+		let (data, cached_image) = initial_frame(&mut runtime, ActionKind::Currency, &settings);
+		assert!(data.is_some());
+		assert_eq!(
+			cached_image,
+			render::widget(ActionKind::Currency, &cached, &settings)
+		);
+		assert_ne!(cached_image, first_image);
+	}
 
 	#[test]
 	fn identical_requests_share_one_scheduler_group() {

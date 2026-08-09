@@ -2,7 +2,7 @@
 	"Name": "PixelDeck Widgets",
 	"Description": "Fast native dashboard widgets for PixelDeck",
 	"Author": "dvgamerr",
-	"Version": "1.0.0",
+	"Version": "1.0.1",
 	"CodePathWin": "windows/bin/pixeldeck-widgets.exe",
 	"CodePathMac": "darwin/bin/pixeldeck-widgets",
 	"CodePathLin": "linux/bin/pixeldeck-widgets",
