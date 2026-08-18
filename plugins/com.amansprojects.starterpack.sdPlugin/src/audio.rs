@@ -1,4 +1,4 @@
-use openaction::*;
+use crate::compat::*;
 use std::{
 	collections::HashMap,
 	sync::{

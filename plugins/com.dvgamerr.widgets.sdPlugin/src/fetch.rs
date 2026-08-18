@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow, bail};
-use openaction::SettingsValue;
 use regex::Regex;
 use reqwest::{Client, Url};
+use serde_json::Value as SettingsValue;
 use serde_json::Value;
 use std::{sync::LazyLock, time::Duration};
 

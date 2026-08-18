@@ -1,4 +1,5 @@
-use openaction::{EventHandlerResult, OUTBOUND_EVENT_MANAGER, OutboundEventManager, SettingsValue};
+use openaction::{Instance, OpenActionResult, get_instance};
+use serde_json::Value as SettingsValue;
 use std::{
 	collections::HashMap,
 	sync::{LazyLock, Mutex},
@@ -108,8 +109,8 @@ pub async fn appear(
 	context: String,
 	kind: ActionKind,
 	settings: SettingsValue,
-	outbound: &mut OutboundEventManager,
-) -> EventHandlerResult {
+	instance: &Instance,
+) -> OpenActionResult<()> {
 	let image = {
 		let mut runtime = RUNTIME.lock().unwrap();
 		let (data, image) = initial_frame(&mut runtime, kind, &settings);
@@ -128,7 +129,7 @@ pub async fn appear(
 		ensure_worker(&mut runtime);
 		image
 	};
-	outbound.set_image(context, Some(image), None).await?;
+	instance.set_image(Some(image), None).await?;
 	Ok(())
 }
 
@@ -276,9 +277,8 @@ async fn finish(context: String, generation: u64, result: Result<WidgetData, Str
 		return;
 	};
 
-	let mut manager = OUTBOUND_EVENT_MANAGER.lock().await;
-	if let Some(outbound) = manager.as_mut()
-		&& let Err(error) = outbound.set_image(context, Some(image), None).await
+	if let Some(instance) = get_instance(context).await
+		&& let Err(error) = instance.set_image(Some(image), None).await
 	{
 		log::warn!("widget image update failed: {error}");
 	}

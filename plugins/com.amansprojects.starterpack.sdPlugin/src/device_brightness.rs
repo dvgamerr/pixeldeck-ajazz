@@ -1,4 +1,4 @@
-use openaction::*;
+use crate::compat::*;
 
 // Non-spec OpenDeck-specific protocols are used in this file.
 

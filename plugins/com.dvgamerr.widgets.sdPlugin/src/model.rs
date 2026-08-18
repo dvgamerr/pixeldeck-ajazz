@@ -1,6 +1,7 @@
-use openaction::SettingsValue;
+use serde_json::Value as SettingsValue;
 use std::time::Duration;
 
+#[cfg(test)]
 pub const PREFIX: &str = "com.dvgamerr.widgets.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -15,6 +16,7 @@ pub enum ActionKind {
 }
 
 impl ActionKind {
+	#[cfg(test)]
 	pub fn from_uuid(uuid: &str) -> Option<Self> {
 		match uuid.strip_prefix(PREFIX)? {
 			"gold-price" => Some(Self::Gold),

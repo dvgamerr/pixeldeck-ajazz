@@ -1,4 +1,4 @@
-use openaction::{DialRotateEvent, EventHandlerResult, OutboundEventManager, SettingsValue};
+use crate::compat::{DialRotateEvent, EventHandlerResult, OutboundEventManager, SettingsValue};
 
 use crate::{
 	pixel::{data_uri, text_path},

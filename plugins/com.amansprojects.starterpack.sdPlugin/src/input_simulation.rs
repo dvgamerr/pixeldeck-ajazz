@@ -2,7 +2,7 @@ use super::ActionEvent;
 
 use std::sync::LazyLock;
 
-use openaction::*;
+use crate::compat::*;
 
 use enigo::{
 	Enigo, Settings,

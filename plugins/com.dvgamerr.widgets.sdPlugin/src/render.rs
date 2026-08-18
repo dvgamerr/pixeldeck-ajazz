@@ -1,5 +1,5 @@
 use chrono::{Datelike, Local, Timelike, Weekday};
-use openaction::SettingsValue;
+use serde_json::Value as SettingsValue;
 
 use crate::{
 	model::{

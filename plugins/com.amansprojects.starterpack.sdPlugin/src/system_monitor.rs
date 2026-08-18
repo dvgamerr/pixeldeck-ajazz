@@ -1,4 +1,4 @@
-use openaction::{EventHandlerResult, OutboundEventManager, SettingsValue};
+use crate::compat::{EventHandlerResult, OutboundEventManager, SettingsValue};
 use plotters::prelude::{ChartBuilder, IntoDrawingArea, LineSeries, RGBColor, SVGBackend};
 use std::{
 	collections::{HashMap, VecDeque},

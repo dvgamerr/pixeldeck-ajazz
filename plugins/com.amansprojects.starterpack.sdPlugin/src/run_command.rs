@@ -3,7 +3,7 @@ use super::ActionEvent;
 use std::io::Read;
 use std::process::{Command, Stdio};
 
-use openaction::*;
+use crate::compat::*;
 
 #[cfg(unix)]
 fn is_flatpak() -> bool {

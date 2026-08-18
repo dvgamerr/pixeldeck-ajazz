@@ -8,85 +8,148 @@ mod runtime;
 
 use model::ActionKind;
 use openaction::*;
+use serde_json::Value;
 
-struct GlobalEventHandler;
-impl openaction::GlobalEventHandler for GlobalEventHandler {}
-
-struct ActionEventHandler;
-impl openaction::ActionEventHandler for ActionEventHandler {
-	async fn key_up(
-		&self,
-		event: KeyEvent,
-		outbound: &mut OutboundEventManager,
-	) -> EventHandlerResult {
-		let Some(kind) = ActionKind::from_uuid(&event.action) else {
-			return Ok(());
-		};
-		match kind {
-			ActionKind::Gold => {
-				outbound
-					.open_url("https://www.tradingview.com/symbols/XAUUSD/".to_owned())
-					.await?;
-			}
-			ActionKind::Currency
-			| ActionKind::Stock
-			| ActionKind::AirQuality
-			| ActionKind::Weather => runtime::refresh(&event.context),
-			ActionKind::PowerShell => {
-				local::press(event.context, kind, event.payload.settings, outbound).await?;
-			}
-			ActionKind::WorkHours => {}
+async fn key_up(instance: &Instance, kind: ActionKind, settings: &Value) -> OpenActionResult<()> {
+	match kind {
+		ActionKind::Gold => {
+			open_url("https://www.tradingview.com/symbols/XAUUSD/".to_owned()).await?;
 		}
-		Ok(())
+		ActionKind::Currency | ActionKind::Stock | ActionKind::AirQuality | ActionKind::Weather => {
+			runtime::refresh(&instance.instance_id)
+		}
+		ActionKind::PowerShell => {
+			local::press(
+				instance.instance_id.clone(),
+				kind,
+				settings.clone(),
+				instance,
+			)
+			.await?;
+		}
+		ActionKind::WorkHours => {}
 	}
+	Ok(())
+}
 
-	async fn will_appear(
-		&self,
-		event: AppearEvent,
-		outbound: &mut OutboundEventManager,
-	) -> EventHandlerResult {
-		let Some(kind) = ActionKind::from_uuid(&event.action) else {
-			return Ok(());
-		};
-		if kind.scheduled() {
-			runtime::appear(event.context, kind, event.payload.settings, outbound).await
-		} else {
-			local::appear(event.context, kind, &event.payload.settings, outbound).await
-		}
-	}
-
-	async fn will_disappear(
-		&self,
-		event: AppearEvent,
-		_outbound: &mut OutboundEventManager,
-	) -> EventHandlerResult {
-		if ActionKind::from_uuid(&event.action).is_some_and(ActionKind::scheduled) {
-			runtime::disappear(&event.context);
-		}
-		Ok(())
-	}
-
-	async fn did_receive_settings(
-		&self,
-		event: DidReceiveSettingsEvent,
-		outbound: &mut OutboundEventManager,
-	) -> EventHandlerResult {
-		let Some(kind) = ActionKind::from_uuid(&event.action) else {
-			return Ok(());
-		};
-		if kind.scheduled() {
-			if let Some(image) = runtime::update(&event.context, event.payload.settings) {
-				outbound.set_image(event.context, Some(image), None).await?;
-			}
-			Ok(())
-		} else {
-			local::settings_changed(event.context, kind, &event.payload.settings, outbound).await
-		}
+async fn will_appear(
+	instance: &Instance,
+	kind: ActionKind,
+	settings: &Value,
+) -> OpenActionResult<()> {
+	if kind.scheduled() {
+		runtime::appear(
+			instance.instance_id.clone(),
+			kind,
+			settings.clone(),
+			instance,
+		)
+		.await
+	} else {
+		local::appear(instance.instance_id.clone(), kind, settings, instance).await
 	}
 }
 
+async fn will_disappear(instance: &Instance, kind: ActionKind) -> OpenActionResult<()> {
+	if kind.scheduled() {
+		runtime::disappear(&instance.instance_id);
+	}
+	Ok(())
+}
+
+async fn did_receive_settings(
+	instance: &Instance,
+	kind: ActionKind,
+	settings: &Value,
+) -> OpenActionResult<()> {
+	if kind.scheduled() {
+		if let Some(image) = runtime::update(&instance.instance_id, settings.clone()) {
+			instance.set_image(Some(image), None).await?;
+		}
+		Ok(())
+	} else {
+		local::settings_changed(instance.instance_id.clone(), kind, settings, instance).await
+	}
+}
+
+macro_rules! widget_action {
+	($name:ident, $uuid:literal, $kind:expr) => {
+		struct $name;
+
+		#[async_trait]
+		impl Action for $name {
+			const UUID: ActionUuid = $uuid;
+			type Settings = Value;
+
+			async fn key_up(&self, instance: &Instance, settings: &Value) -> OpenActionResult<()> {
+				key_up(instance, $kind, settings).await
+			}
+
+			async fn will_appear(
+				&self,
+				instance: &Instance,
+				settings: &Value,
+			) -> OpenActionResult<()> {
+				will_appear(instance, $kind, settings).await
+			}
+
+			async fn will_disappear(
+				&self,
+				instance: &Instance,
+				_settings: &Value,
+			) -> OpenActionResult<()> {
+				will_disappear(instance, $kind).await
+			}
+
+			async fn did_receive_settings(
+				&self,
+				instance: &Instance,
+				settings: &Value,
+			) -> OpenActionResult<()> {
+				did_receive_settings(instance, $kind, settings).await
+			}
+		}
+	};
+}
+
+widget_action!(
+	GoldAction,
+	"com.dvgamerr.widgets.gold-price",
+	ActionKind::Gold
+);
+widget_action!(
+	CurrencyAction,
+	"com.dvgamerr.widgets.currency-rate",
+	ActionKind::Currency
+);
+widget_action!(
+	StockAction,
+	"com.dvgamerr.widgets.stock-price",
+	ActionKind::Stock
+);
+widget_action!(
+	AirQualityAction,
+	"com.dvgamerr.widgets.air-quality",
+	ActionKind::AirQuality
+);
+widget_action!(
+	PowerShellAction,
+	"com.dvgamerr.widgets.powershell",
+	ActionKind::PowerShell
+);
+widget_action!(
+	WeatherAction,
+	"com.dvgamerr.widgets.weather",
+	ActionKind::Weather
+);
+widget_action!(
+	WorkHoursAction,
+	"com.dvgamerr.widgets.work-hours",
+	ActionKind::WorkHours
+);
+
 #[tokio::main]
-async fn main() {
+async fn main() -> OpenActionResult<()> {
 	let _ = simplelog::TermLogger::init(
 		simplelog::LevelFilter::Info,
 		simplelog::Config::default(),
@@ -94,9 +157,14 @@ async fn main() {
 		simplelog::ColorChoice::Never,
 	);
 
-	if let Err(error) = init_plugin(GlobalEventHandler, ActionEventHandler).await {
-		log::error!("Failed to initialise PixelDeck Widgets: {error}");
-	}
+	register_action(GoldAction).await;
+	register_action(CurrencyAction).await;
+	register_action(StockAction).await;
+	register_action(AirQualityAction).await;
+	register_action(PowerShellAction).await;
+	register_action(WeatherAction).await;
+	register_action(WorkHoursAction).await;
+	run(std::env::args().collect()).await
 }
 
 #[cfg(test)]

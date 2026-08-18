@@ -1,4 +1,4 @@
-use openaction::{EventHandlerResult, OUTBOUND_EVENT_MANAGER};
+use crate::compat::{EventHandlerResult, OUTBOUND_EVENT_MANAGER};
 use std::{
 	collections::HashSet,
 	sync::{

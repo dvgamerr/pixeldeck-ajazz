@@ -1,4 +1,5 @@
-use openaction::{EventHandlerResult, OUTBOUND_EVENT_MANAGER, OutboundEventManager, SettingsValue};
+use openaction::{Instance, OpenActionResult, get_instance};
+use serde_json::Value as SettingsValue;
 
 use crate::{
 	model::{ActionKind, setting_string},
@@ -6,14 +7,14 @@ use crate::{
 };
 
 pub async fn appear(
-	context: String,
+	_context: String,
 	kind: ActionKind,
 	settings: &SettingsValue,
-	outbound: &mut OutboundEventManager,
-) -> EventHandlerResult {
+	instance: &Instance,
+) -> OpenActionResult<()> {
 	if kind == ActionKind::PowerShell {
-		outbound
-			.set_image(context, Some(render::powershell(settings, "idle")), None)
+		instance
+			.set_image(Some(render::powershell(settings, "idle")), None)
 			.await?;
 	}
 	Ok(())
@@ -23,28 +24,24 @@ pub async fn settings_changed(
 	context: String,
 	kind: ActionKind,
 	settings: &SettingsValue,
-	outbound: &mut OutboundEventManager,
-) -> EventHandlerResult {
-	appear(context, kind, settings, outbound).await
+	instance: &Instance,
+) -> OpenActionResult<()> {
+	appear(context, kind, settings, instance).await
 }
 
 pub async fn press(
 	context: String,
 	kind: ActionKind,
 	settings: SettingsValue,
-	outbound: &mut OutboundEventManager,
-) -> EventHandlerResult {
+	instance: &Instance,
+) -> OpenActionResult<()> {
 	if kind != ActionKind::PowerShell {
 		return Ok(());
 	}
 
 	let script = setting_string(&settings, "script", "");
-	outbound
-		.set_image(
-			context.clone(),
-			Some(render::powershell(&settings, "running")),
-			None,
-		)
+	instance
+		.set_image(Some(render::powershell(&settings, "running")), None)
 		.await?;
 	tokio::spawn(async move {
 		let result = platform::run_script(&script).await;
@@ -52,13 +49,12 @@ pub async fn press(
 		if let Err(error) = &result {
 			log::warn!("PowerShell action failed for {context}: {error:#}");
 		}
-		let mut manager = OUTBOUND_EVENT_MANAGER.lock().await;
-		if let Some(outbound) = manager.as_mut() {
-			let _ = outbound.set_image(context.clone(), Some(image), None).await;
+		if let Some(instance) = get_instance(context.clone()).await {
+			let _ = instance.set_image(Some(image), None).await;
 			if result.is_ok() {
-				let _ = outbound.show_ok(context).await;
+				let _ = instance.show_ok().await;
 			} else {
-				let _ = outbound.show_alert(context).await;
+				let _ = instance.show_alert().await;
 			}
 		}
 	});
