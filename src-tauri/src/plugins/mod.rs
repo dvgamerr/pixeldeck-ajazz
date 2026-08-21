@@ -31,6 +31,7 @@ enum PluginInstance {
 pub static DEVICE_NAMESPACES: Lazy<RwLock<HashMap<String, String>>> = Lazy::new(|| RwLock::new(HashMap::new()));
 static INSTANCES: Lazy<Mutex<HashMap<String, PluginInstance>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 const MICROSOFT_TEAMS_PLUGIN: &str = "com.microsoft.teams.sdPlugin";
+const LOOPBACK_HOST: &str = "127.0.0.1";
 
 fn should_sync_builtin_plugin(existing_version: &semver::Version, builtin_version: &semver::Version, development: bool) -> bool {
 	development || existing_version < builtin_version
@@ -51,19 +52,23 @@ fn webview_plugin_initialization_script(port: u16, uuid: &str, info: &str) -> St
 	)
 }
 
-pub static PORT_BASE: Lazy<u16> = Lazy::new(|| {
-	let mut base = 57116;
+fn find_available_port_base(mut base: u16) -> u16 {
 	loop {
-		let websocket_result = std::net::TcpListener::bind(format!("0.0.0.0:{}", base));
-		let webserver_result = std::net::TcpListener::bind(format!("0.0.0.0:{}", base + 2));
+		let Some(webserver_port) = base.checked_add(2) else {
+			base = 1024;
+			continue;
+		};
+		let websocket_result = std::net::TcpListener::bind((LOOPBACK_HOST, base));
+		let webserver_result = std::net::TcpListener::bind((LOOPBACK_HOST, webserver_port));
 		if websocket_result.is_ok() && webserver_result.is_ok() {
-			log::debug!("Using ports {} and {}", base, base + 2);
-			break;
+			log::debug!("Using ports {} and {}", base, webserver_port);
+			return base;
 		}
-		base += 1;
+		base = base.checked_add(1).unwrap_or(1024);
 	}
-	base
-});
+}
+
+pub static PORT_BASE: Lazy<u16> = Lazy::new(|| find_available_port_base(57116));
 
 /// Initialise a plugin from a given directory.
 pub async fn initialise_plugin(path: &path::Path) -> anyhow::Result<()> {
@@ -191,7 +196,7 @@ pub async fn initialise_plugin(path: &path::Path) -> anyhow::Result<()> {
 
 	let code_path_lowercase = code_path.to_ascii_lowercase();
 	if [".html", ".htm", ".xhtml"].iter().any(|extension| code_path_lowercase.ends_with(extension)) {
-		let url = format!("http://localhost:{}/", *PORT_BASE + 2) + path.join(&code_path).to_str().unwrap();
+		let url = format!("http://{}:{}/", LOOPBACK_HOST, *PORT_BASE + 2) + path.join(&code_path).to_str().unwrap();
 		let info = info_param::make_info(plugin_uuid.to_owned(), manifest.version, false).await;
 		let initialization_script = webview_plugin_initialization_script(*PORT_BASE, plugin_uuid, &serde_json::to_string(&info)?);
 		let plugin_uuid_for_log = plugin_uuid.to_owned();
@@ -480,7 +485,7 @@ pub fn initialise_plugins() {
 
 /// Start the WebSocket server that plugins communicate with.
 async fn init_websocket_server() {
-	let listener = match TcpListener::bind(format!("0.0.0.0:{}", *PORT_BASE)).await {
+	let listener = match TcpListener::bind((LOOPBACK_HOST, *PORT_BASE)).await {
 		Ok(listener) => listener,
 		Err(error) => {
 			error!("Failed to bind plugin WebSocket server to socket: {}", error);
@@ -524,7 +529,7 @@ async fn accept_connection(stream: TcpStream) {
 
 #[cfg(test)]
 mod tests {
-	use super::{should_sync_builtin_plugin, webview_plugin_initialization_script};
+	use super::{LOOPBACK_HOST, find_available_port_base, should_sync_builtin_plugin, webview_plugin_initialization_script};
 	use semver::Version;
 
 	#[test]
@@ -552,5 +557,14 @@ mod tests {
 		assert!(script.contains(r#"connectElgatoStreamDeckSocket(57116, "com.microsoft.teams.sdPlugin", "registerPlugin""#));
 		assert!(script.contains(r#"`{"application":"PixelDeck"}`"#));
 		assert!(script.contains("setTimeout(opendeckInit, 10)"));
+	}
+
+	#[test]
+	fn port_selection_skips_a_loopback_asset_port_that_is_already_in_use() {
+		let occupied_listener = std::net::TcpListener::bind((LOOPBACK_HOST, 0)).unwrap();
+		let occupied_port = occupied_listener.local_addr().unwrap().port();
+		let candidate_base = occupied_port - 2;
+
+		assert_ne!(find_available_port_base(candidate_base), candidate_base);
 	}
 }

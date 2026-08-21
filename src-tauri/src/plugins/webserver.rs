@@ -34,7 +34,7 @@ fn mime(extension: &str) -> String {
 /// Start a simple webserver to serve files of plugins that run in a browser environment.
 pub async fn init_webserver(prefix: PathBuf) {
 	let server = {
-		let listener = std::net::TcpListener::bind(format!("0.0.0.0:{}", *super::PORT_BASE + 2)).unwrap();
+		let listener = std::net::TcpListener::bind((super::LOOPBACK_HOST, *super::PORT_BASE + 2)).unwrap();
 
 		#[cfg(windows)]
 		{
@@ -88,7 +88,7 @@ pub async fn init_webserver(prefix: PathBuf) {
 		};
 
 		// The Svelte frontend cannot call the connectElgatoStreamDeckSocket function on property inspector frames
-		// because they are served from a different origin (this webserver on port 57118).
+		// because they are served from a different origin (this plugin asset webserver).
 		// Instead, we have to inject a script onto all property inspector frames that receives a message
 		// from the Svelte frontend over window.postMessage.
 

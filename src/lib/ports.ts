@@ -1,12 +1,20 @@
 import { invoke } from "@tauri-apps/api/core";
 
 let portBase = 57116;
-let initialised = false;
+let initialisation: Promise<void> | undefined;
 
 export async function initPortBase(): Promise<void> {
-	if (initialised) return;
-	portBase = await invoke<number>("get_port_base");
-	initialised = true;
+	if (!initialisation) {
+		initialisation = invoke<number>("get_port_base")
+			.then((value) => {
+				portBase = value;
+			})
+			.catch((error) => {
+				initialisation = undefined;
+				throw error;
+			});
+	}
+	return initialisation;
 }
 
 export function getWebSocketPort(): number {
@@ -14,5 +22,5 @@ export function getWebSocketPort(): number {
 }
 
 export function getWebserverUrl(path: string = ""): string {
-	return `http://localhost:${portBase + 2}/${path}`;
+	return `http://127.0.0.1:${portBase + 2}/${path}`;
 }
