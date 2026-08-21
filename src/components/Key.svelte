@@ -8,6 +8,7 @@
 	import Pencil from "phosphor-svelte/lib/Pencil";
 	import Trash from "phosphor-svelte/lib/Trash";
 	import InstanceEditor from "./InstanceEditor.svelte";
+	import LoadingSquares from "./LoadingSquares.svelte";
 
 	import { isGifImageSource } from "$lib/imageFormat";
 	import { queueDeviceFrame } from "$lib/deviceFrames";
@@ -163,6 +164,8 @@
 	let renderGeneration = 0;
 	let cachedGifSource: string | undefined;
 	let cachedGifImage: HTMLImageElement | undefined;
+	let showLoadingAnimation = false;
+	let loadedInstanceKey: string | undefined;
 	$: profileRenderingPaused = context ? $pausedProfileRenderingDevices.has(context.device) : false;
 
 	function stopAnimation() {
@@ -198,6 +201,8 @@
 		if (!sl || !renderState) {
 			cachedGifSource = undefined;
 			cachedGifImage = undefined;
+			loadedInstanceKey = undefined;
+			showLoadingAnimation = false;
 			const canvasContext = canvas.getContext("2d");
 			if (canvasContext) canvasContext.clearRect(0, 0, canvas.width, canvas.height);
 			sendDeviceFrame(currentContext, isActive, null);
@@ -213,12 +218,23 @@
 			cachedGifImage = undefined;
 		}
 
+		// Show the loading animation immediately for an action instance that has never
+		// rendered a frame before, not on every re-render of a widget that keeps refreshing
+		// its own image. The animation also stands in permanently for the alert icon whenever
+		// an action has no icon to show at all, or its icon fails to decode.
+		const instanceKey = `${sl.context}:${sl.action.uuid}`;
+		const isNewInstance = instanceKey != loadedInstanceKey;
+		if (isNewInstance) showLoadingAnimation = true;
+
+		let missingIcon = false;
 		const drawFrame = async (sendToDevice: boolean) => {
 			if (generation != renderGeneration) return undefined;
 			const unlock = await lock.lock();
 			try {
 				if (generation != renderGeneration) return undefined;
-				sourceImage = await renderImage(canvas, renderState, fallback, currentShowOk, currentShowAlert, true, currentPressed, sourceImage);
+				const rendered = await renderImage(canvas, renderState, fallback, currentShowOk, currentShowAlert, true, currentPressed, sourceImage);
+				sourceImage = rendered.image;
+				missingIcon = rendered.iconUnavailable;
 			} finally {
 				unlock();
 			}
@@ -229,6 +245,10 @@
 		};
 
 		const image = await drawFrame(true);
+		if (generation == renderGeneration) {
+			if (isNewInstance) loadedInstanceKey = instanceKey;
+			showLoadingAnimation = missingIcon;
+		}
 		if (generation != renderGeneration || !isGif || !image) return;
 
 		cachedGifSource = source;
@@ -263,26 +283,34 @@
 	}
 </script>
 
-<canvas
-	bind:this={canvas}
-	class={`key-canvas key-canvas--${resolvedAppearance} relative block outline-none outline-offset-2 outline-primary`}
-	class:-m-2={resolvedAppearance != "touch"}
-	class:border-2={resolvedAppearance != "touch"}
-	class:rounded-md={resolvedAppearance == "key"}
-	class:outline-solid={slot && $inspectedInstance == slot.context}
-	class:-m-[2.06rem]={resolvedAppearance != "touch" && size == 192}
-	class:rounded-full!={resolvedAppearance == "encoder"}
-	width={canvasWidth}
-	height={canvasHeight}
-	style={canvasStyle}
-	draggable={slot != null}
-	on:dragstart
-	on:dragover
-	on:drop
-	on:click|stopPropagation={select}
-	on:keyup|stopPropagation={select}
-	on:contextmenu={contextMenu}
-></canvas>
+<div class="relative inline-block">
+	<canvas
+		bind:this={canvas}
+		class={`key-canvas key-canvas--${resolvedAppearance} relative block outline-none outline-offset-2 outline-primary`}
+		class:-m-2={resolvedAppearance != "touch"}
+		class:border-2={resolvedAppearance != "touch"}
+		class:rounded-md={resolvedAppearance == "key"}
+		class:outline-solid={slot && $inspectedInstance == slot.context}
+		class:-m-[2.06rem]={resolvedAppearance != "touch" && size == 192}
+		class:rounded-full!={resolvedAppearance == "encoder"}
+		width={canvasWidth}
+		height={canvasHeight}
+		style={canvasStyle}
+		draggable={slot != null}
+		on:dragstart
+		on:dragover
+		on:drop
+		on:click|stopPropagation={select}
+		on:keyup|stopPropagation={select}
+		on:contextmenu={contextMenu}
+	></canvas>
+
+	{#if showLoadingAnimation}
+		<div class="pointer-events-none absolute inset-0 flex items-center justify-center">
+			<LoadingSquares size={resolvedAppearance == "touch" ? 20 : 24} class="text-white/60" />
+		</div>
+	{/if}
+</div>
 
 {#if $openContextMenu && contextsEqual($openContextMenu.context, context)}
 	<ul use:portalToBody class="menu fixed z-[1000] w-36 rounded-box border border-base-300 bg-base-100 p-1 shadow-lg" style={`left: ${$openContextMenu.x}px; top: ${$openContextMenu.y}px;`}>

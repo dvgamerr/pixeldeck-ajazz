@@ -74,7 +74,7 @@ export async function renderImage(
 	processImage: boolean,
 	pressed: boolean,
 	sourceImage?: HTMLImageElement,
-): Promise<HTMLImageElement | undefined> {
+): Promise<{ image: HTMLImageElement | undefined; iconUnavailable: boolean }> {
 	// Create canvas
 	let scale = 1;
 	if (!canvas) {
@@ -86,23 +86,32 @@ export async function renderImage(
 	}
 
 	const context = canvas.getContext("2d");
-	if (!context) return;
+	if (!context) return { image: undefined, iconUnavailable: false };
 	let renderedImage: HTMLImageElement | undefined;
+	// No icon configured, or the configured icon failed to decode. Report this back so the
+	// caller can show a loading animation in place of the alert icon instead of drawing it here.
+	let iconUnavailable = false;
 
-	try {
-		// Load image
-		const image = sourceImage ?? (await loadImage(processImage ? getImage(state.image, fallback) : state.image));
-		renderedImage = image;
+	const resolvedSource = processImage ? getImage(state.image, fallback) : state.image;
+	if (resolvedSource == "/alert.png") {
+		iconUnavailable = true;
+		context.clearRect(0, 0, canvas.width, canvas.height);
+	} else {
+		try {
+			// Load image
+			const image = sourceImage ?? (await loadImage(resolvedSource));
+			renderedImage = image;
 
-		// Draw image
-		context.clearRect(0, 0, canvas.width, canvas.height);
-		context.imageSmoothingQuality = "high";
-		context.drawImage(image, 0, 0, canvas.width, canvas.height);
-	} catch (error: any) {
-		if (!(error instanceof Event)) console.error(error);
-		renderedImage = undefined;
-		context.clearRect(0, 0, canvas.width, canvas.height);
-		showAlert = true;
+			// Draw image
+			context.clearRect(0, 0, canvas.width, canvas.height);
+			context.imageSmoothingQuality = "high";
+			context.drawImage(image, 0, 0, canvas.width, canvas.height);
+		} catch (error: any) {
+			if (!(error instanceof Event)) console.error(error);
+			renderedImage = undefined;
+			iconUnavailable = true;
+			context.clearRect(0, 0, canvas.width, canvas.height);
+		}
 	}
 
 	// Draw text
@@ -176,7 +185,7 @@ export async function renderImage(
 		}
 	}
 
-	return renderedImage;
+	return { image: renderedImage, iconUnavailable };
 }
 
 export async function resizeImage(source: string): Promise<string | undefined> {
