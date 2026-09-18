@@ -261,20 +261,21 @@ If you have already donated, thank you so much for your support!"#,
 					.await?
 					.json::<serde_json::Value>()
 					.await?;
-				if !res.is_object() {
+				// A release payload we cannot read is not worth reporting: the check is
+				// best-effort and the application works fine without it.
+				let Some(tag_name) = res.get("tag_name").and_then(serde_json::Value::as_str) else {
 					return Ok(());
-				}
-				if !res.get("tag_name").is_some() {
+				};
+				let Ok(latest) = semver::Version::parse(tag_name.trim_start_matches('v')) else {
 					return Ok(());
-				}
-				let tag_name = res.get("tag_name").unwrap().as_str().unwrap();
-				if semver::Version::parse(built_info::PKG_VERSION)?.cmp(&semver::Version::parse(&tag_name[1..])?) == Ordering::Less {
+				};
+				if semver::Version::parse(built_info::PKG_VERSION)?.cmp(&latest) == Ordering::Less {
 					let app = APP_HANDLE.get().unwrap();
 					app.dialog()
 						.message(format!(
 							"A new version of {PRODUCT_NAME}, {}, is available.\nUpdate description:\n\n{}",
 							tag_name,
-							res.get("body").map(|v| v.as_str().unwrap()).unwrap_or("No description").trim()
+							res.get("body").and_then(serde_json::Value::as_str).unwrap_or("No description").trim()
 						))
 						.title(format!("{PRODUCT_NAME} update available"))
 						.show(|_| ());
@@ -286,7 +287,8 @@ If you have already donated, thank you so much for your support!"#,
 			if settings.value.updatecheck {
 				tokio::spawn(async {
 					if let Err(error) = update().await {
-						log::warn!("Failed to update application: {error}");
+						// Usually just a machine that is offline; skip the check silently.
+						log::debug!("Update check skipped: {error}");
 					}
 				});
 			}

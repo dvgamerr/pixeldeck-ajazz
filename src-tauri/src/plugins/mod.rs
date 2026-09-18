@@ -516,10 +516,15 @@ async fn accept_connection(stream: TcpStream) {
 		}
 	};
 
-	let Ok(register_event) = socket.next().await.unwrap() else {
+	// A plugin that connects and drops again must not take the accept loop with it.
+	let Some(Ok(register_event)) = socket.next().await else {
 		return;
 	};
-	match serde_json::from_str(&register_event.clone().into_text().unwrap()) {
+	let Ok(payload) = register_event.clone().into_text() else {
+		warn!("Ignoring a plugin connection that opened with a non-text message");
+		return;
+	};
+	match serde_json::from_str(&payload) {
 		Ok(event) => crate::events::register_plugin(event, socket).await,
 		Err(_) => {
 			let _ = crate::events::inbound::process_incoming_message(Ok(register_event), "", false).await;
