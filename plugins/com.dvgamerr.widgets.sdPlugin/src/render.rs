@@ -67,7 +67,7 @@ fn signed_number_2(value: f64) -> String {
 	}
 }
 
-pub fn loading(kind: ActionKind) -> String {
+fn status(kind: ActionKind, status: &str, accent: &str) -> String {
 	let label = match kind {
 		ActionKind::Gold => "GOLD",
 		ActionKind::Currency => "FX RATE",
@@ -78,11 +78,21 @@ pub fn loading(kind: ActionKind) -> String {
 		_ => "WIDGET",
 	};
 	let content = format!(
-		"{}{}<path d=\"M42 91h60\" stroke=\"{CYAN}\" stroke-width=\"5\" stroke-dasharray=\"8 6\"/>",
+		"{}{}<path d=\"M42 91h60\" stroke=\"{accent}\" stroke-width=\"5\" stroke-dasharray=\"8 6\"/>",
 		text_path(label, 72.0, 62, 14, WHITE),
-		text_path("LOADING", 72.0, 116, 10, MUTED),
+		text_path(status, 72.0, 116, 10, MUTED),
 	);
-	shell(CYAN, &content)
+	shell(accent, &content)
+}
+
+pub fn loading(kind: ActionKind) -> String {
+	status(kind, "LOADING", CYAN)
+}
+
+/// Shown only when a widget has never received data and its source is currently
+/// unreachable. Refreshes that fail with a frame already on screen keep that frame.
+pub fn offline(kind: ActionKind) -> String {
+	status(kind, "OFFLINE", MUTED)
 }
 
 pub fn error(message: &str) -> String {
