@@ -9,11 +9,11 @@ Status legend: [ ] todo, [~] in progress, [x] done
 - [x] 0.4 `qlty init` + qlty.toml (exclude target, build, .svelte-kit, node_modules, examples)
 - [x] 0.5 Record qlty smells/metrics/check baseline in docs/QLTY_BASELINE.md
 
-## Phase 1 - Tech debt audit  [ ]
-- [ ] 1.1 Categorise findings (size, duplication, dead code, unwrap, CSS duplication, docs drift)
-- [ ] 1.2 Order modules by hardware risk
+## Phase 1 - Tech debt audit  [x]
+- [x] 1.1 Categorise findings (size, duplication, dead code, unwrap, CSS duplication, docs drift)
+- [x] 1.2 Order modules by hardware risk
 
-## Phase 2 - Refactor (one commit per module)  [ ]
+## Phase 2 - Refactor (one commit per module)  [~]
 - [ ] 2.1 Frontend lib
 - [ ] 2.2 Svelte components
 - [ ] 2.3 Rust app (src-tauri/src)
@@ -41,3 +41,4 @@ Status legend: [ ] todo, [~] in progress, [x] done
 - Baseline note: `cargo fmt --check` reports "Incorrect newline style" locally only because git autocrlf=true gives CRLF working copies (rustfmt.toml wants Unix). Not a code defect.
 - qlty baseline smells: 17 files flagged (complexity: main, initialise_plugin, init_application_watcher, process_incoming_message, handle_input_state_change, renderImage, appear, init_webserver, update_profile_action_references ...; duplication: plugins pixel.rs x2, starterpack main.rs; many-params: curve_to, renderImage).
 - qlty check baseline: shellcheck CRLF in scripts, osv-scanner advisories in Cargo.lock (glib, rustls, unic-*, proc-macro-error), prettier fmt on 3 json/test files, yamllint on ajazz-sdk qa.yaml, rustfmt plugin lacked edition (fixed via root rustfmt.toml).
+- Phase 1 findings = qlty baseline above; risk order: frontend -> src-tauri/src -> sdk/plugins. Phase 2 running as 3 parallel workstreams (frontend / src-tauri app / sdk+plugins).
