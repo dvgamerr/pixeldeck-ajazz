@@ -33,6 +33,10 @@ fn startup_image_project_store(device: &str) -> Result<Store<StartupImageProject
 	Store::new(&id, &crate::shared::config_dir().join("startup-images"), StartupImageProject::default())
 }
 
+fn layer_transform_is_valid(layer: &StartupImageLayer) -> bool {
+	[layer.zoom, layer.offset_x, layer.offset_y, layer.rotation].iter().all(|value| value.is_finite()) && (0.25..=3.0).contains(&layer.zoom)
+}
+
 fn validate_startup_image_project(project: &StartupImageProject) -> Result<(), anyhow::Error> {
 	if project.layers.len() > MAX_STARTUP_IMAGE_LAYERS {
 		return Err(anyhow::anyhow!("A startup image can contain at most {MAX_STARTUP_IMAGE_LAYERS} layers"));
@@ -42,7 +46,7 @@ fn validate_startup_image_project(project: &StartupImageProject) -> Result<(), a
 		if layer.id.trim().is_empty() || layer.name.trim().is_empty() {
 			return Err(anyhow::anyhow!("Every startup image layer must have an ID and name"));
 		}
-		if !layer.zoom.is_finite() || !layer.offset_x.is_finite() || !layer.offset_y.is_finite() || !layer.rotation.is_finite() || !(0.25..=3.0).contains(&layer.zoom) {
+		if !layer_transform_is_valid(layer) {
 			return Err(anyhow::anyhow!("A startup image layer contains an invalid transform"));
 		}
 		validate_project_image(&layer.image)?;
@@ -80,6 +84,51 @@ fn decode_startup_image(value: &str) -> Result<image::DynamicImage, anyhow::Erro
 	Ok(image::load_from_memory_with_format(&bytes, format)?)
 }
 
+fn compact_lowercase(value: &str) -> String {
+	value
+		.to_ascii_lowercase()
+		.chars()
+		.filter(|character| !character.is_whitespace() && *character != '\'' && *character != '"')
+		.collect()
+}
+
+fn has_external_reference(compact: &str) -> bool {
+	compact.contains("@import") || compact.contains("url(http") || compact.contains("url(//")
+}
+
+fn validate_svg_element(node: roxmltree::Node) -> Result<(), anyhow::Error> {
+	let tag = node.tag_name().name();
+	if ["script", "foreignObject", "iframe", "object", "embed"].iter().any(|blocked| tag.eq_ignore_ascii_case(blocked)) {
+		return Err(anyhow::anyhow!("The selected SVG contains unsupported active content"));
+	}
+	if tag.eq_ignore_ascii_case("style") {
+		let compact_text = compact_lowercase(node.text().unwrap_or_default());
+		if has_external_reference(&compact_text) || compact_text.contains("javascript:") {
+			return Err(anyhow::anyhow!("The selected SVG contains an unsupported external reference"));
+		}
+	}
+	Ok(())
+}
+
+fn validate_svg_attribute(attribute: roxmltree::Attribute) -> Result<(), anyhow::Error> {
+	let name = attribute.name();
+	let value = attribute.value().trim();
+	let lower_value = value.to_ascii_lowercase();
+	if name.to_ascii_lowercase().starts_with("on") || lower_value.contains("javascript:") {
+		return Err(anyhow::anyhow!("The selected SVG contains unsupported active content"));
+	}
+
+	let is_safe_href_target = value.starts_with('#')
+		|| matches!(
+			lower_value.split_once(',').map(|(metadata, _)| metadata),
+			Some("data:image/png;base64") | Some("data:image/jpeg;base64") | Some("data:image/bmp;base64") | Some("data:image/x-ms-bmp;base64")
+		);
+	if (name.eq_ignore_ascii_case("href") && !is_safe_href_target) || has_external_reference(&compact_lowercase(&lower_value)) {
+		return Err(anyhow::anyhow!("The selected SVG contains an unsupported external reference"));
+	}
+	Ok(())
+}
+
 fn validate_svg(bytes: &[u8]) -> Result<(), anyhow::Error> {
 	let source = std::str::from_utf8(bytes)?;
 	let document = roxmltree::Document::parse(source)?;
@@ -89,42 +138,9 @@ fn validate_svg(bytes: &[u8]) -> Result<(), anyhow::Error> {
 	}
 
 	for node in document.descendants().filter(|node| node.is_element()) {
-		let tag = node.tag_name().name();
-		if ["script", "foreignObject", "iframe", "object", "embed"].iter().any(|blocked| tag.eq_ignore_ascii_case(blocked)) {
-			return Err(anyhow::anyhow!("The selected SVG contains unsupported active content"));
-		}
-		if tag.eq_ignore_ascii_case("style") {
-			let compact_text: String = node
-				.text()
-				.unwrap_or_default()
-				.to_ascii_lowercase()
-				.chars()
-				.filter(|character| !character.is_whitespace() && *character != '\'' && *character != '"')
-				.collect();
-			if compact_text.contains("@import") || compact_text.contains("url(http") || compact_text.contains("url(//") || compact_text.contains("javascript:") {
-				return Err(anyhow::anyhow!("The selected SVG contains an unsupported external reference"));
-			}
-		}
-
+		validate_svg_element(node)?;
 		for attribute in node.attributes() {
-			let name = attribute.name();
-			let value = attribute.value().trim();
-			let lower_value = value.to_ascii_lowercase();
-			if name.to_ascii_lowercase().starts_with("on") || lower_value.contains("javascript:") {
-				return Err(anyhow::anyhow!("The selected SVG contains unsupported active content"));
-			}
-			if name.eq_ignore_ascii_case("href")
-				&& !value.starts_with('#')
-				&& !matches!(
-					lower_value.split_once(',').map(|(metadata, _)| metadata),
-					Some("data:image/png;base64") | Some("data:image/jpeg;base64") | Some("data:image/bmp;base64") | Some("data:image/x-ms-bmp;base64")
-				) {
-				return Err(anyhow::anyhow!("The selected SVG contains an unsupported external reference"));
-			}
-			let compact_value: String = lower_value.chars().filter(|character| !character.is_whitespace() && *character != '\'' && *character != '"').collect();
-			if compact_value.contains("@import") || compact_value.contains("url(http") || compact_value.contains("url(//") {
-				return Err(anyhow::anyhow!("The selected SVG contains an unsupported external reference"));
-			}
+			validate_svg_attribute(attribute)?;
 		}
 	}
 

@@ -1,56 +1,27 @@
 pub mod info_param;
+mod launch;
+mod localise;
 pub mod manifest;
+mod socket;
+mod sync;
 mod webserver;
 
 use crate::APP_HANDLE;
-use crate::built_info::TARGET;
-use crate::shared::{CATEGORIES, Category, config_dir, convert_icon, is_flatpak, log_dir};
-use crate::store::get_settings;
+use crate::shared::{CATEGORIES, Category, config_dir, log_dir};
+use launch::{INSTANCES, PLATFORM_NAME, PluginInstance};
 
 use std::collections::HashMap;
-use std::process::{Child, Command, Stdio};
 use std::{fs, path};
 
 use tauri::{AppHandle, Manager};
 
-use futures::StreamExt;
-use tokio::net::{TcpListener, TcpStream};
-
 use anyhow::anyhow;
-use log::{error, warn};
 use once_cell::sync::Lazy;
-use tokio::sync::{Mutex, RwLock};
-
-enum PluginInstance {
-	Webview,
-	Wine(Child),
-	Native(Child),
-	Node(Child),
-}
+use tokio::sync::RwLock;
 
 pub static DEVICE_NAMESPACES: Lazy<RwLock<HashMap<String, String>>> = Lazy::new(|| RwLock::new(HashMap::new()));
-static INSTANCES: Lazy<Mutex<HashMap<String, PluginInstance>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 const MICROSOFT_TEAMS_PLUGIN: &str = "com.microsoft.teams.sdPlugin";
 const LOOPBACK_HOST: &str = "127.0.0.1";
-
-fn should_sync_builtin_plugin(existing_version: &semver::Version, builtin_version: &semver::Version, development: bool) -> bool {
-	development || existing_version < builtin_version
-}
-
-fn webview_plugin_initialization_script(port: u16, uuid: &str, info: &str) -> String {
-	format!(
-		r#"const opendeckInit = () => {{
-			try {{
-				if (typeof connectOpenActionSocket === "function") connectOpenActionSocket({port}, "{uuid}", "registerPlugin", `{info}`);
-				else connectElgatoStreamDeckSocket({port}, "{uuid}", "registerPlugin", `{info}`);
-			}} catch (e) {{
-				setTimeout(opendeckInit, 10);
-			}}
-		}};
-		opendeckInit();
-		"#
-	)
-}
 
 fn find_available_port_base(mut base: u16) -> u16 {
 	loop {
@@ -70,276 +41,39 @@ fn find_available_port_base(mut base: u16) -> u16 {
 
 pub static PORT_BASE: Lazy<u16> = Lazy::new(|| find_available_port_base(57116));
 
+async fn register_actions(category_name: String, category_icon: Option<String>, actions: Vec<crate::shared::Action>) {
+	let mut categories = CATEGORIES.write().await;
+	if let Some(category) = categories.get_mut(&category_name) {
+		for action in actions {
+			if let Some(index) = category.actions.iter().position(|v| v.uuid == action.uuid) {
+				category.actions.remove(index);
+			}
+			category.actions.push(action);
+		}
+		return;
+	}
+
+	if !actions.is_empty() {
+		categories.insert(category_name, Category { icon: category_icon, actions });
+	}
+}
+
 /// Initialise a plugin from a given directory.
 pub async fn initialise_plugin(path: &path::Path) -> anyhow::Result<()> {
 	let plugin_uuid = path.file_name().unwrap().to_str().unwrap();
 
 	let mut manifest = manifest::read_manifest(path)?;
+	localise::localise_manifest(&mut manifest, path, plugin_uuid);
 
-	if let Some(icon) = manifest.category_icon {
-		let category_icon_path = path.join(icon);
-		manifest.category_icon = Some(convert_icon(category_icon_path.to_string_lossy().to_string()));
-	}
+	register_actions(manifest.category.clone(), manifest.category_icon.clone(), std::mem::take(&mut manifest.actions)).await;
 
-	for action in &mut manifest.actions {
-		plugin_uuid.clone_into(&mut action.plugin);
-
-		let action_icon_path = path.join(action.icon.clone());
-		action.icon = convert_icon(action_icon_path.to_str().unwrap().to_owned());
-
-		if !action.property_inspector.is_empty() {
-			action.property_inspector = path.join(&action.property_inspector).to_string_lossy().to_string();
-		} else if let Some(ref property_inspector) = manifest.property_inspector_path {
-			action.property_inspector = path.join(property_inspector).to_string_lossy().to_string();
-		}
-
-		for state in &mut action.states {
-			if state.image == "actionDefaultImage" {
-				state.image.clone_from(&action.icon);
-			} else {
-				let state_icon = path.join(state.image.clone());
-				state.image = convert_icon(state_icon.to_str().unwrap().to_owned());
-			}
-
-			match state.family.clone().to_lowercase().trim() {
-				"arial" => "Liberation Sans",
-				"arial black" => "Archivo Black",
-				"comic sans ms" => "Comic Neue",
-				"courier" | "Courier New" => "Courier Prime",
-				"georgia" => "Tinos",
-				"impact" => "Anton",
-				"microsoft sans serif" | "Times New Roman" => "Liberation Serif",
-				"tahoma" | "Verdana" => "Open Sans",
-				"trebuchet ms" => "Fira Sans",
-				_ => continue,
-			}
-			.clone_into(&mut state.family);
-		}
-	}
-
-	{
-		let mut categories = CATEGORIES.write().await;
-		if let Some(category) = categories.get_mut(&manifest.category) {
-			for action in manifest.actions {
-				if let Some(index) = category.actions.iter().position(|v| v.uuid == action.uuid) {
-					category.actions.remove(index);
-				}
-				category.actions.push(action);
-			}
-		} else {
-			let mut category: Category = Category {
-				icon: manifest.category_icon,
-				actions: vec![],
-			};
-			for action in manifest.actions {
-				category.actions.push(action);
-			}
-			if !category.actions.is_empty() {
-				categories.insert(manifest.category, category);
-			}
-		}
-	}
-
-	if let Some(namespace) = manifest.device_namespace {
+	if let Some(namespace) = manifest.device_namespace.take() {
 		DEVICE_NAMESPACES.write().await.insert(namespace, plugin_uuid.to_owned());
 	}
 
-	#[cfg(target_os = "windows")]
-	let platform = "windows";
-	#[cfg(target_os = "macos")]
-	let platform = "mac";
-	#[cfg(target_os = "linux")]
-	let platform = "linux";
+	launch::launch(path, plugin_uuid, &manifest).await?;
 
-	let mut code_path = manifest.code_path;
-	let mut use_wine = false;
-	let mut supported = false;
-
-	// Determine the method used to run the plugin based on its supported operating systems and the current operating system.
-	for os in manifest.os {
-		if os.platform == platform {
-			#[cfg(target_os = "windows")]
-			if manifest.code_path_windows.is_some() {
-				code_path = manifest.code_path_windows.clone();
-			}
-			#[cfg(target_os = "macos")]
-			if manifest.code_path_macos.is_some() {
-				code_path = manifest.code_path_macos;
-			}
-			#[cfg(target_os = "linux")]
-			if manifest.code_path_linux.is_some() {
-				code_path = manifest.code_path_linux;
-			}
-			code_path = manifest.code_paths.and_then(|p| p.get(TARGET).cloned()).or(code_path);
-
-			use_wine = false;
-
-			supported = true;
-			break;
-		} else if os.platform == "windows" {
-			use_wine = true;
-			supported = true;
-		}
-	}
-
-	if code_path.is_none() && use_wine {
-		code_path = manifest.code_path_windows;
-	}
-
-	if !supported || code_path.is_none() {
-		return Err(anyhow!("unsupported on platform {}", platform));
-	}
-
-	let code_path = code_path.unwrap();
-	let port_string = PORT_BASE.to_string();
-	let args = ["-port", port_string.as_str(), "-pluginUUID", plugin_uuid, "-registerEvent", "registerPlugin", "-info"];
-
-	let code_path_lowercase = code_path.to_ascii_lowercase();
-	if [".html", ".htm", ".xhtml"].iter().any(|extension| code_path_lowercase.ends_with(extension)) {
-		let url = format!("http://{}:{}/", LOOPBACK_HOST, *PORT_BASE + 2) + path.join(&code_path).to_str().unwrap();
-		let info = info_param::make_info(plugin_uuid.to_owned(), manifest.version, false).await;
-		let initialization_script = webview_plugin_initialization_script(*PORT_BASE, plugin_uuid, &serde_json::to_string(&info)?);
-		let plugin_uuid_for_log = plugin_uuid.to_owned();
-		let window = tauri::WebviewWindowBuilder::new(APP_HANDLE.get().unwrap(), plugin_uuid.replace('.', "_"), tauri::WebviewUrl::External(url.parse()?))
-			.title(plugin_uuid)
-			.visible(false)
-			.on_page_load(move |window, payload| {
-				if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
-					&& let Err(error) = window.eval(initialization_script.clone())
-				{
-					log::error!("Failed to initialise webview plugin {plugin_uuid_for_log}: {error}");
-				}
-			})
-			.build()?;
-
-		if let Ok(store) = get_settings()
-			&& store.value.developer
-		{
-			let _ = window.show();
-			window.open_devtools();
-		}
-
-		INSTANCES.lock().await.insert(plugin_uuid.to_owned(), PluginInstance::Webview);
-	} else if code_path.to_lowercase().ends_with(".js") || code_path.to_lowercase().ends_with(".mjs") || code_path.to_lowercase().ends_with(".cjs") {
-		// Check for Node.js installation and version in one go.
-		let command = if is_flatpak() { "flatpak-spawn" } else { "node" };
-		let extra_args = if is_flatpak() { vec!["--host", "node"] } else { vec![] };
-		let version_output = Command::new(command).args(&extra_args).arg("--version").output();
-		if version_output.is_err() || String::from_utf8(version_output.unwrap().stdout).unwrap().trim() < "v20.0.0" {
-			return Err(anyhow!("Node.js version 20.0.0 or higher is required"));
-		}
-
-		let info = info_param::make_info(plugin_uuid.to_owned(), manifest.version, true).await;
-		let log_file = fs::File::create(log_dir().join("plugins").join(format!("{plugin_uuid}.log")))?;
-
-		#[cfg(target_os = "windows")]
-		{
-			use std::os::windows::process::CommandExt;
-			let child = Command::new(command)
-				.current_dir(path)
-				.args(extra_args)
-				.arg(code_path)
-				.args(args)
-				.arg(serde_json::to_string(&info)?)
-				.stdout(Stdio::from(log_file.try_clone()?))
-				.stderr(Stdio::from(log_file))
-				.creation_flags(0x08000000)
-				.spawn()?;
-
-			INSTANCES.lock().await.insert(plugin_uuid.to_owned(), PluginInstance::Node(child));
-		}
-
-		#[cfg(not(target_os = "windows"))]
-		{
-			let child = Command::new(command)
-				.current_dir(path)
-				.args(extra_args)
-				.arg(code_path)
-				.args(args)
-				.arg(serde_json::to_string(&info)?)
-				.stdout(Stdio::from(log_file.try_clone()?))
-				.stderr(Stdio::from(log_file))
-				.spawn()?;
-
-			INSTANCES.lock().await.insert(plugin_uuid.to_owned(), PluginInstance::Node(child));
-		}
-	} else if use_wine {
-		let command = if is_flatpak() { "flatpak-spawn" } else { "wine" };
-		let extra_args = if is_flatpak() { vec!["--host", "wine"] } else { vec![] };
-		let result = Command::new(command)
-			.args(&extra_args)
-			.arg("--version")
-			.stdout(Stdio::null())
-			.stderr(Stdio::null())
-			.spawn()
-			.and_then(|mut child| child.wait())
-			.map(|status| status.success());
-		if !matches!(result, Ok(true)) {
-			return Err(anyhow!("failed to detect an installation of Wine"));
-		}
-
-		let info = info_param::make_info(plugin_uuid.to_owned(), manifest.version, true).await;
-		let log_file = fs::File::create(log_dir().join("plugins").join(format!("{plugin_uuid}.log")))?;
-
-		let mut command = Command::new(command);
-		command
-			.current_dir(path)
-			.args(extra_args)
-			.arg(code_path)
-			.args(args)
-			.arg(serde_json::to_string(&info)?)
-			.stdout(Stdio::from(log_file.try_clone()?))
-			.stderr(Stdio::from(log_file));
-		if get_settings()?.value.separatewine {
-			command.env("WINEPREFIX", path.join("wineprefix").to_string_lossy().to_string());
-		} else {
-			let _ = fs::remove_dir_all(path.join("wineprefix"));
-		}
-		let child = command.spawn()?;
-
-		INSTANCES.lock().await.insert(plugin_uuid.to_owned(), PluginInstance::Wine(child));
-	} else {
-		let info = info_param::make_info(plugin_uuid.to_owned(), manifest.version, false).await;
-		let log_file = fs::File::create(log_dir().join("plugins").join(format!("{plugin_uuid}.log")))?;
-
-		#[cfg(target_os = "windows")]
-		{
-			use std::os::windows::process::CommandExt;
-			let child = Command::new(path.join(code_path))
-				.current_dir(path)
-				.args(args)
-				.arg(serde_json::to_string(&info)?)
-				.stdout(Stdio::from(log_file.try_clone()?))
-				.stderr(Stdio::from(log_file))
-				.creation_flags(0x08000000)
-				.spawn()?;
-
-			INSTANCES.lock().await.insert(plugin_uuid.to_owned(), PluginInstance::Native(child));
-		}
-
-		#[cfg(unix)]
-		{
-			use std::os::unix::fs::PermissionsExt;
-			fs::set_permissions(path.join(&code_path), fs::Permissions::from_mode(0o755))?;
-		}
-
-		#[cfg(not(target_os = "windows"))]
-		{
-			let child = Command::new(path.join(code_path))
-				.current_dir(path)
-				.args(args)
-				.arg(serde_json::to_string(&info)?)
-				.stdout(Stdio::from(log_file.try_clone()?))
-				.stderr(Stdio::from(log_file))
-				.spawn()?;
-
-			INSTANCES.lock().await.insert(plugin_uuid.to_owned(), PluginInstance::Native(child));
-		}
-	}
-
-	if let Some(applications) = manifest.applications_to_monitor
-		&& let Some(applications) = applications.get(platform)
-	{
+	if let Some(applications) = manifest.applications_to_monitor.as_ref().and_then(|applications| applications.get(PLATFORM_NAME)) {
 		crate::application_watcher::start_monitoring(plugin_uuid, applications).await;
 	}
 
@@ -417,152 +151,20 @@ pub async fn deactivate_plugins() {
 
 /// Initialise plugins from the plugins directory.
 pub fn initialise_plugins() {
-	tokio::spawn(init_websocket_server());
+	tokio::spawn(socket::init_websocket_server());
 	tokio::spawn(webserver::init_webserver(config_dir()));
 
 	let plugin_dir = config_dir().join("plugins");
 	let _ = fs::create_dir_all(&plugin_dir);
 	let _ = fs::create_dir_all(log_dir().join("plugins"));
 
-	if let Ok(Ok(entries)) = APP_HANDLE.get().unwrap().path().resolve("plugins", tauri::path::BaseDirectory::Resource).map(fs::read_dir) {
-		for entry in entries.flatten() {
-			if let Err(error) = (|| -> Result<(), anyhow::Error> {
-				let builtin_version = semver::Version::parse(&serde_json::from_slice::<manifest::PluginManifest>(&fs::read(entry.path().join("manifest.json"))?)?.version)?;
-				let existing_path = plugin_dir.join(entry.file_name());
-				if (|| -> Result<(), anyhow::Error> {
-					let existing_version = semver::Version::parse(&serde_json::from_slice::<manifest::PluginManifest>(&fs::read(existing_path.join("manifest.json"))?)?.version)?;
-					if should_sync_builtin_plugin(&existing_version, &builtin_version, cfg!(debug_assertions)) {
-						Err(anyhow::anyhow!("builtin plugin should replace existing plugin"))
-					} else {
-						Ok(())
-					}
-				})()
-				.is_err()
-				{
-					if existing_path.exists() {
-						fs::rename(&existing_path, existing_path.with_extension("old"))?;
-					}
-					if crate::shared::copy_dir(entry.path(), &existing_path).is_err() && existing_path.with_extension("old").exists() {
-						fs::rename(existing_path.with_extension("old"), &existing_path)?;
-					}
-					let _ = fs::remove_dir_all(existing_path.with_extension("old"));
-				}
-				Ok(())
-			})() {
-				error!("Failed to upgrade builtin plugin {}: {}", entry.file_name().to_string_lossy(), error);
-			}
-		}
-	}
-
-	let entries = match fs::read_dir(&plugin_dir) {
-		Ok(p) => p,
-		Err(error) => {
-			error!("Failed to read plugins directory at {}: {}", plugin_dir.display(), error);
-			panic!()
-		}
-	};
-
-	// Iterate through all directory entries in the plugins folder and initialise them as plugins if appropriate
-	for entry in entries {
-		if let Ok(entry) = entry {
-			let path = match entry.metadata().unwrap().is_symlink() {
-				true => fs::read_link(entry.path()).unwrap(),
-				false => entry.path(),
-			};
-			let metadata = fs::metadata(&path).unwrap();
-			if metadata.is_dir() {
-				tokio::spawn(async move {
-					if let Err(error) = initialise_plugin(&path).await {
-						warn!("Failed to initialise plugin at {}: {:#}", path.display(), error);
-					}
-				});
-			}
-		} else if let Err(error) = entry {
-			warn!("Failed to read entry of plugins directory: {}", error)
-		}
-	}
-}
-
-/// Start the WebSocket server that plugins communicate with.
-async fn init_websocket_server() {
-	let listener = match TcpListener::bind((LOOPBACK_HOST, *PORT_BASE)).await {
-		Ok(listener) => listener,
-		Err(error) => {
-			error!("Failed to bind plugin WebSocket server to socket: {}", error);
-			return;
-		}
-	};
-
-	#[cfg(windows)]
-	{
-		use std::os::windows::io::AsRawSocket;
-		use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
-
-		unsafe { SetHandleInformation(listener.as_raw_socket() as _, HANDLE_FLAG_INHERIT, 0) };
-	}
-
-	while let Ok((stream, _)) = listener.accept().await {
-		accept_connection(stream).await;
-	}
-}
-
-/// Handle incoming data from a WebSocket connection.
-async fn accept_connection(stream: TcpStream) {
-	let mut socket = match tokio_tungstenite::accept_async(stream).await {
-		Ok(socket) => socket,
-		Err(error) => {
-			warn!("Failed to complete WebSocket handshake: {}", error);
-			return;
-		}
-	};
-
-	// A plugin that connects and drops again must not take the accept loop with it.
-	let Some(Ok(register_event)) = socket.next().await else {
-		return;
-	};
-	let Ok(payload) = register_event.clone().into_text() else {
-		warn!("Ignoring a plugin connection that opened with a non-text message");
-		return;
-	};
-	match serde_json::from_str(&payload) {
-		Ok(event) => crate::events::register_plugin(event, socket).await,
-		Err(_) => {
-			let _ = crate::events::inbound::process_incoming_message(Ok(register_event), "", false).await;
-		}
-	}
+	sync::sync_builtin_plugins(&plugin_dir);
+	sync::spawn_installed_plugins(&plugin_dir);
 }
 
 #[cfg(test)]
 mod tests {
-	use super::{LOOPBACK_HOST, find_available_port_base, should_sync_builtin_plugin, webview_plugin_initialization_script};
-	use semver::Version;
-
-	#[test]
-	fn development_builds_always_sync_builtin_plugins() {
-		let builtin = Version::new(2, 12, 3);
-
-		assert!(should_sync_builtin_plugin(&Version::new(2, 12, 3), &builtin, true));
-		assert!(should_sync_builtin_plugin(&Version::new(3, 0, 0), &builtin, true));
-	}
-
-	#[test]
-	fn release_builds_only_upgrade_older_builtin_plugins() {
-		let builtin = Version::new(2, 12, 3);
-
-		assert!(should_sync_builtin_plugin(&Version::new(2, 12, 2), &builtin, false));
-		assert!(!should_sync_builtin_plugin(&Version::new(2, 12, 3), &builtin, false));
-		assert!(!should_sync_builtin_plugin(&Version::new(3, 0, 0), &builtin, false));
-	}
-
-	#[test]
-	fn webview_plugin_initialization_uses_the_requested_registration_details() {
-		let script = webview_plugin_initialization_script(57_116, "com.microsoft.teams.sdPlugin", r#"{"application":"PixelDeck"}"#);
-
-		assert!(script.contains(r#"connectOpenActionSocket(57116, "com.microsoft.teams.sdPlugin", "registerPlugin""#));
-		assert!(script.contains(r#"connectElgatoStreamDeckSocket(57116, "com.microsoft.teams.sdPlugin", "registerPlugin""#));
-		assert!(script.contains(r#"`{"application":"PixelDeck"}`"#));
-		assert!(script.contains("setTimeout(opendeckInit, 10)"));
-	}
+	use super::{LOOPBACK_HOST, find_available_port_base};
 
 	#[test]
 	fn port_selection_skips_a_loopback_asset_port_that_is_already_in_use() {

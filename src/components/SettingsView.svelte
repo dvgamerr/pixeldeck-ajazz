@@ -6,6 +6,7 @@
 	import Star from "phosphor-svelte/lib/Star";
 	import DeviceStartupImage from "./DeviceStartupImage.svelte";
 	import Popup from "./Popup.svelte";
+	import PopupHeader from "./PopupHeader.svelte";
 	import Tooltip from "./Tooltip.svelte";
 
 	import { getPausedProfileRenderingDevices, resumeProfileRendering } from "$lib/profileRendering";
@@ -93,7 +94,7 @@
 	});
 </script>
 
-<button type="button" class="btn btn-ghost btn-sm" title="Open settings" on:click={() => (showPopup = true)}>
+<button type="button" class="btn btn-ghost btn-sm" data-testid="settings-open" title="Open settings" on:click={() => (showPopup = true)}>
 	<Gear size="16" weight="bold" />
 	<span>Settings</span>
 </button>
@@ -104,32 +105,42 @@
 	}}
 />
 
-<Popup show={showPopup} fullscreen onClose={closeSettings}>
-	<div class="flex h-full min-h-0 min-w-0 flex-col overflow-x-hidden">
-		<header class="flex shrink-0 items-center border-b border-base-300 pb-3">
-			<div>
-				<p class="ui-eyebrow">OpenDeck</p>
-				<h2 class="ui-page-title">Settings</h2>
-			</div>
-			<button type="button" class="btn btn-circle btn-ghost ml-auto" aria-label="Close settings" on:click={closeSettings}>✕</button>
-		</header>
+<Popup show={showPopup} fullscreen onClose={closeSettings} testid="settings-popup">
+	<div class="flex h-full min-h-0 min-w-0 flex-col overflow-x-hidden" data-testid="settings-view">
+		<PopupHeader eyebrow="OpenDeck" title="Settings" closeLabel="Close settings" onClose={closeSettings} testid="settings-header" />
 
 		<div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
 			<div role="tablist" class="tabs tabs-border mt-3">
-				<button type="button" role="tab" class:tab-active={activeTab == "general"} class="tab" aria-selected={activeTab == "general"} on:click={() => (activeTab = "general")}>General</button>
-				<button type="button" role="tab" class:tab-active={activeTab == "startup-image"} class="tab" aria-selected={activeTab == "startup-image"} on:click={() => (activeTab = "startup-image")}>
+				<button
+					type="button"
+					role="tab"
+					class:tab-active={activeTab == "general"}
+					class="tab"
+					data-testid="settings-tab-general"
+					aria-selected={activeTab == "general"}
+					on:click={() => (activeTab = "general")}>General</button
+				>
+				<button
+					type="button"
+					role="tab"
+					class:tab-active={activeTab == "startup-image"}
+					class="tab"
+					data-testid="settings-tab-startup-image"
+					aria-selected={activeTab == "startup-image"}
+					on:click={() => (activeTab = "startup-image")}
+				>
 					Startup image
 				</button>
 			</div>
 
 			{#if activeTab == "general" && $settings}
 				<div class="mt-4 grid min-h-0 min-w-0 flex-1 gap-4 overflow-x-hidden overflow-y-auto xl:grid-cols-2">
-					<section class="card min-w-0 border border-base-300 bg-base-200">
+					<section class="settings-card">
 						<div class="card-body">
 							<h3 class="card-title">Appearance &amp; device</h3>
 							<label class="form-control grid grid-cols-[minmax(10rem,1fr)_auto] items-center gap-3">
 								<span class="label-text">Language</span>
-								<select bind:value={$settings.language} class="select select-sm w-40">
+								<select data-testid="settings-language" bind:value={$settings.language} class="select select-sm w-40">
 									<option value="en">English</option>
 									<option value="es">Español</option>
 									<option value="zh_CN">中文</option>
@@ -144,56 +155,56 @@
 							</p>
 							<label class="form-control grid grid-cols-[minmax(10rem,1fr)_minmax(10rem,1fr)] items-center gap-3">
 								<span class="label-text">Device brightness</span>
-								<input type="range" min="0" max="100" bind:value={$settings.brightness} class="range range-primary range-sm" />
+								<input type="range" data-testid="settings-brightness" min="0" max="100" bind:value={$settings.brightness} class="range range-primary range-sm" />
 							</label>
-							<label class="form-control grid grid-cols-[1fr_auto] items-center gap-3">
+							<label class="settings-row">
 								<span class="label-text">Dark theme</span>
-								<input type="checkbox" bind:checked={$settings.darktheme} class="toggle toggle-primary" />
+								<input type="checkbox" data-testid="settings-darktheme" bind:checked={$settings.darktheme} class="toggle toggle-primary" />
 							</label>
 						</div>
 					</section>
 
-					<section class="card min-w-0 border border-base-300 bg-base-200">
+					<section class="settings-card">
 						<div class="card-body">
 							<h3 class="card-title">Startup &amp; privacy</h3>
-							<label class="form-control grid grid-cols-[1fr_auto] items-center gap-3">
+							<label class="settings-row">
 								<span class="label-text">Run in background</span>
-								<input type="checkbox" bind:checked={$settings.background} class="toggle toggle-primary" />
+								<input type="checkbox" data-testid="settings-background" bind:checked={$settings.background} class="toggle toggle-primary" />
 							</label>
-							<label class="form-control grid grid-cols-[1fr_auto] items-center gap-3">
+							<label class="settings-row">
 								<span class="label-text">Start at login</span>
-								<input type="checkbox" bind:checked={$settings.autolaunch} class="toggle toggle-primary" />
+								<input type="checkbox" data-testid="settings-autolaunch" bind:checked={$settings.autolaunch} class="toggle toggle-primary" />
 							</label>
-							<label class="form-control grid grid-cols-[1fr_auto] items-center gap-3">
+							<label class="settings-row">
 								<span class="label-text">Check for updates</span>
-								<input type="checkbox" bind:checked={$settings.updatecheck} class="toggle toggle-primary" />
+								<input type="checkbox" data-testid="settings-updatecheck" bind:checked={$settings.updatecheck} class="toggle toggle-primary" />
 							</label>
-							<label class="form-control grid grid-cols-[1fr_auto] items-center gap-3">
+							<label class="settings-row">
 								<span class="label-text">Contribute statistics</span>
-								<input type="checkbox" bind:checked={$settings.statistics} class="toggle toggle-primary" />
+								<input type="checkbox" data-testid="settings-statistics" bind:checked={$settings.statistics} class="toggle toggle-primary" />
 							</label>
 						</div>
 					</section>
 
-					<section class="card min-w-0 border border-base-300 bg-base-200 xl:col-span-2">
+					<section class="settings-card xl:col-span-2">
 						<div class="card-body">
 							<h3 class="card-title">Advanced</h3>
 							{#if !buildInfo?.includes("windows")}
-								<label class="form-control grid grid-cols-[1fr_auto_auto] items-center gap-3">
+								<label class="settings-row settings-row--tip">
 									<span class="label-text">Create separate Wine prefixes</span>
 									<Tooltip>Each plugin receives a separate Wine prefix, which can use around 300 MB when initialized.</Tooltip>
-									<input type="checkbox" bind:checked={$settings.separatewine} class="toggle toggle-primary" />
+									<input type="checkbox" data-testid="settings-separatewine" bind:checked={$settings.separatewine} class="toggle toggle-primary" />
 								</label>
 							{/if}
-							<label class="form-control grid grid-cols-[1fr_auto_auto] items-center gap-3">
+							<label class="settings-row settings-row--tip">
 								<span class="label-text">Developer mode</span>
 								<Tooltip>Enables plugin development tools and exposes local file paths through the local webserver.</Tooltip>
-								<input type="checkbox" bind:checked={$settings.developer} class="toggle toggle-primary" />
+								<input type="checkbox" data-testid="settings-developer" bind:checked={$settings.developer} class="toggle toggle-primary" />
 							</label>
-							<label class="form-control grid grid-cols-[1fr_auto_auto] items-center gap-3">
+							<label class="settings-row settings-row--tip">
 								<span class="label-text">Disable device discovery</span>
 								<Tooltip>Allows connected devices to be managed by other software.</Tooltip>
-								<input type="checkbox" bind:checked={$settings.disabledevices} class="toggle toggle-primary" />
+								<input type="checkbox" data-testid="settings-disabledevices" bind:checked={$settings.disabledevices} class="toggle toggle-primary" />
 							</label>
 						</div>
 					</section>
@@ -217,8 +228,8 @@
 
 			{#if activeTab == "general"}
 				<footer class="mt-4 flex flex-wrap items-center gap-2 border-t border-base-300 pt-3">
-					<button type="button" class="btn btn-sm" on:click={() => invoke("open_config_directory")}>Open config directory</button>
-					<button type="button" class="btn btn-sm" on:click={() => invoke("open_log_directory")}>Open log directory</button>
+					<button type="button" class="btn btn-sm" data-testid="settings-open-config" on:click={() => invoke("open_config_directory")}>Open config directory</button>
+					<button type="button" class="btn btn-sm" data-testid="settings-open-logs" on:click={() => invoke("open_log_directory")}>Open log directory</button>
 					<span class="ui-caption ui-muted ml-2">{@html buildInfo}</span>
 					<div class="ui-muted ml-auto flex items-center gap-1">
 						<span>Please leave a</span>

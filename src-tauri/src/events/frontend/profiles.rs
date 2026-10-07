@@ -9,16 +9,16 @@ fn connected_device(device: &str) -> Result<crate::shared::DeviceInfo, Error> {
 	DEVICES.get(device).map(|device| device.clone()).ok_or_else(|| Error::new(format!("device {device} not found")))
 }
 
+fn is_valid_profile_segment(segment: &str) -> bool {
+	!segment.is_empty() && segment.chars().all(|character| character.is_ascii_alphanumeric() || character == '_' || character == ' ')
+}
+
 fn validate_profile_id(id: &str) -> Result<(), anyhow::Error> {
 	if id.is_empty() || id.trim() != id {
 		return Err(anyhow::anyhow!("Profile name cannot be empty or start or end with spaces"));
 	}
 	let segments = id.split('/').collect::<Vec<_>>();
-	if segments.len() > 2
-		|| segments
-			.iter()
-			.any(|segment| segment.is_empty() || !segment.chars().all(|character| character.is_ascii_alphanumeric() || character == '_' || character == ' '))
-	{
+	if segments.len() > 2 || !segments.iter().all(|segment| is_valid_profile_segment(segment)) {
 		return Err(anyhow::anyhow!("Profile names may contain letters, numbers, spaces, underscores, and one folder separator"));
 	}
 	Ok(())

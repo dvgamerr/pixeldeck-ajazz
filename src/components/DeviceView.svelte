@@ -19,6 +19,7 @@
 	const AKP05_KEY_RENDER_SIZE = 126;
 	const actionMime = "application/x-opendeck-action";
 	const previewShadowGutter = 32;
+	$: keySize = device.id.startsWith("sd-") && device.rows == 4 && device.columns == 8 ? 192 : 144;
 	let previewViewport: HTMLDivElement;
 	let chassis: HTMLDivElement;
 	let previewScale = 1;
@@ -126,13 +127,15 @@
 	<!-- svelte-ignore a11y-no-static-element-interactions -->
 	<div
 		bind:this={previewViewport}
+		data-testid="device-view"
+		data-device-id={device.id}
 		class="relative h-full min-h-0 w-full min-w-0 overflow-visible"
 		class:hidden={$inspectedParentAction || selectedDevice != device.id}
 		on:click={() => inspectedInstance.set(null)}
 		on:keyup={() => inspectedInstance.set(null)}
 	>
-		<div bind:this={chassis} class="device-chassis flex flex-col rounded-[2rem] border border-base-300 p-6" style={`--preview-scale: ${previewScale};`}>
-			<div class="relative z-[1] flex flex-col">
+		<div bind:this={chassis} data-testid="device-chassis" class="device-chassis flex flex-col rounded-[2rem] border border-base-300 p-6" style={`--preview-scale: ${previewScale};`}>
+			<div class="relative z-[1] flex flex-col" data-testid="device-key-grid">
 				{#each { length: device.rows } as _, r}
 					<div class="flex flex-row">
 						{#each { length: device.columns } as _, c}
@@ -143,7 +146,7 @@
 								on:drop={(event) => handleDrop(event, "Keypad", r * device.columns + c)}
 								on:dragstart={(event) => handleDragStart(event, "Keypad", r * device.columns + c)}
 								{handlePaste}
-								size={device.id.startsWith("sd-") && device.rows == 4 && device.columns == 8 ? 192 : 144}
+								size={keySize}
 								renderWidth={device.type == 7 ? AKP05_KEY_RENDER_SIZE : undefined}
 								renderHeight={device.type == 7 ? AKP05_KEY_RENDER_SIZE : undefined}
 							/>
@@ -153,7 +156,7 @@
 			</div>
 
 			{#if device.type == 7}
-				<div class="touch-strip relative z-[1] mt-4 flex overflow-hidden rounded-lg border-[3px] border-neutral-700 bg-black shadow-inner">
+				<div data-testid="device-touch-strip" class="touch-strip relative z-[1] mt-4 flex overflow-hidden rounded-lg border-[3px] border-neutral-700 bg-black shadow-inner">
 					{#each { length: device.encoders } as _, i}
 						<Key
 							context={{ device: device.id, profile: profile.id, controller: "Encoder", position: i }}
@@ -168,7 +171,7 @@
 						/>
 					{/each}
 				</div>
-				<div class="relative z-[1] mt-4 flex" aria-hidden="true">
+				<div class="relative z-[1] mt-4 flex" aria-hidden="true" data-testid="device-knobs">
 					{#each { length: device.encoders } as _}
 						<div class="flex w-40 justify-center">
 							<div class="device-knob size-[4.4rem] rounded-full border border-[#101010]"></div>
@@ -176,7 +179,7 @@
 					{/each}
 				</div>
 			{:else}
-				<div class="flex flex-row">
+				<div class="flex flex-row" data-testid="device-encoder-row">
 					{#each { length: device.encoders } as _, i}
 						<Key
 							context={{ device: device.id, profile: profile.id, controller: "Encoder", position: i }}
@@ -185,7 +188,7 @@
 							on:drop={(event) => handleDrop(event, "Encoder", i)}
 							on:dragstart={(event) => handleDragStart(event, "Encoder", i)}
 							{handlePaste}
-							size={device.id.startsWith("sd-") && device.rows == 4 && device.columns == 8 ? 192 : 144}
+							size={keySize}
 						/>
 					{/each}
 				</div>

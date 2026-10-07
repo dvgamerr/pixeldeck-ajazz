@@ -18,6 +18,7 @@ use crate::images::{
 use crate::info::Kind;
 use crate::hid::is_supported_interface;
 use crate::protocol::{codes, extract_string, request, AjazzProtocolParser, AjazzRequestBuilder};
+use crate::input_state::handle_input_state_change;
 use crate::{AjazzError, AjazzInput, DeviceState, Event};
 
 /// Interface for an Ajazz device
@@ -515,78 +516,6 @@ fn should_flush_each_image(kind: Kind) -> bool {
 pub struct DeviceStateReader {
     device: Arc<Ajazz>,
     states: Mutex<DeviceState>,
-}
-
-pub(crate) fn handle_input_state_change(
-    input: AjazzInput,
-    current_state: &mut DeviceState,
-) -> Result<Vec<Event>, AjazzError> {
-    let mut updates = vec![];
-    match input {
-        AjazzInput::ButtonStateChange(buttons) => {
-            for (index, is_changed) in buttons.iter().enumerate() {
-                if !is_changed {
-                    continue;
-                }
-
-                current_state.buttons[index] = !current_state.buttons[index];
-                if current_state.buttons[index] {
-                    updates.push(Event::ButtonDown(index as u8));
-                } else {
-                    updates.push(Event::ButtonUp(index as u8));
-                }
-            }
-        }
-
-        AjazzInput::EncoderStateChange(encoders) => {
-            for (index, is_changed) in encoders.iter().enumerate() {
-                if !is_changed {
-                    continue;
-                }
-
-                current_state.encoders[index] = !current_state.encoders[index];
-                if current_state.encoders[index] {
-                    updates.push(Event::EncoderDown(index as u8));
-                } else {
-                    updates.push(Event::EncoderUp(index as u8));
-                }
-            }
-        }
-
-        AjazzInput::EncoderTwist(twist) => {
-            for (index, change) in twist.iter().enumerate() {
-                if *change != 0 {
-                    updates.push(Event::EncoderTwist(index as u8, *change));
-                }
-            }
-        }
-
-        AjazzInput::ButtonEvent(index, pressed) => {
-            let Some(current) = current_state.buttons.get_mut(index as usize) else {
-                return Err(AjazzError::BadData);
-            };
-            if *current != pressed {
-                *current = pressed;
-                updates.push(if pressed {
-                    Event::ButtonDown(index)
-                } else {
-                    Event::ButtonUp(index)
-                });
-            }
-        }
-
-        AjazzInput::EncoderPulse(index) => {
-            if index as usize >= current_state.encoders.len() {
-                return Err(AjazzError::BadData);
-            }
-            updates.push(Event::EncoderDown(index));
-            updates.push(Event::EncoderUp(index));
-        }
-
-        _ => {}
-    }
-
-    Ok(updates)
 }
 
 impl DeviceStateReader {

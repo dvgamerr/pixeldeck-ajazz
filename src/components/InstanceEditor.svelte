@@ -3,6 +3,7 @@
 
 	import { isGifImageSource } from "$lib/imageFormat";
 	import { getImage, resizeImage } from "$lib/rendererHelper";
+	import { portalToPreviewDock } from "$lib/portal";
 
 	import { invoke } from "@tauri-apps/api/core";
 
@@ -16,17 +17,6 @@
 	let fileInput: HTMLInputElement;
 	let colourInput: HTMLInputElement;
 
-	function portalToPreviewDock(node: HTMLElement) {
-		const previewDock = document.querySelector<HTMLElement>(".device-workspace");
-		previewDock?.appendChild(node);
-
-		return {
-			destroy() {
-				node.remove();
-			},
-		};
-	}
-
 	function update(instance: ActionInstance, selectedState: number) {
 		bold = instance.states[selectedState].style.includes("Bold");
 		italic = instance.states[selectedState].style.includes("Italic");
@@ -34,6 +24,46 @@
 
 	function updateStyle() {
 		instance.states[state].style = bold && italic ? "Bold Italic" : bold ? "Bold" : italic ? "Italic" : "Regular";
+	}
+
+	const FONT_FAMILIES = [
+		["Pixeloid Sans", "Pixeloid Sans (Pixel)"],
+		["Liberation Sans", "Liberation Sans"],
+		["Archivo Black", "Archivo Black"],
+		["Comic Neue", "Comic Neue"],
+		["Courier Prime", "Courier Prime"],
+		["Tinos", "Tinos"],
+		["Anton", "Anton"],
+		["Liberation Serif", "Liberation Serif"],
+		["Open Sans", "Open Sans"],
+		["Fira Sans", "Fira Sans"],
+	];
+
+	$: stateImage = getImage(instance.states[state].image, instance.action.states[state]?.image ?? instance.action.icon);
+
+	function onImageFileChange() {
+		if (!fileInput.files || fileInput.files.length == 0) return;
+		const reader = new FileReader();
+
+		reader.onload = async () => {
+			const result = reader.result?.toString();
+			if (!result) return;
+			const resized = await resizeImage(result);
+			instance.states[state].image = resized ?? result;
+		};
+
+		reader.readAsDataURL(fileInput.files[0]);
+	}
+
+	function onColourChange() {
+		const canvas = document.createElement("canvas");
+		canvas.width = 1;
+		canvas.height = 1;
+		const context = canvas.getContext("2d");
+		if (!context) return;
+		context.fillStyle = colourInput.value;
+		context.fillRect(0, 0, canvas.width, canvas.height);
+		instance.states[state].image = canvas.toDataURL("image/png");
 	}
 
 	function resetImage() {
@@ -49,8 +79,8 @@
 	}}
 />
 
-<div use:portalToPreviewDock class="modal modal-open absolute inset-0 z-[120]">
-	<button type="button" class="modal-backdrop bg-black/60 backdrop-blur-sm" aria-label="Close key editor" on:click={() => (showEditor = false)}>Close</button>
+<div use:portalToPreviewDock data-testid="instance-editor" class="modal modal-open absolute inset-0 z-[120]">
+	<button type="button" class="modal-backdrop bg-black/60 backdrop-blur-sm" aria-label="Close key editor" data-testid="instance-editor-backdrop" on:click={() => (showEditor = false)}>Close</button>
 
 	<div
 		class="modal-box z-10 flex max-h-[calc(100%-2rem)] w-[min(58rem,calc(100%-2rem))] max-w-none flex-col overflow-hidden border border-base-300 bg-base-100 p-0"
@@ -66,13 +96,13 @@
 			<div class="ml-auto flex shrink-0 items-center gap-2">
 				<label class="flex items-center gap-2">
 					<span class="ui-label hidden sm:inline">State</span>
-					<select class="select select-sm w-32" bind:value={state} aria-label="State">
+					<select class="select select-sm w-32" data-testid="instance-editor-state" bind:value={state} aria-label="State">
 						{#each instance.states as _, i}
 							<option value={i}>State {i + 1}</option>
 						{/each}
 					</select>
 				</label>
-				<button type="button" class="btn btn-circle btn-ghost btn-sm" aria-label="Close key editor" on:click={() => (showEditor = false)}>✕</button>
+				<button type="button" class="btn btn-circle btn-ghost btn-sm" aria-label="Close key editor" data-testid="instance-editor-close" on:click={() => (showEditor = false)}>✕</button>
 			</div>
 		</header>
 
@@ -80,7 +110,7 @@
 			<aside class="ui-surface h-fit bg-base-200 p-4 md:sticky md:top-0">
 				<div class="mb-3 flex items-center justify-between">
 					<h3 class="ui-title">Preview</h3>
-					{#if isGifImageSource(getImage(instance.states[state].image, instance.action.states[state]?.image ?? instance.action.icon))}
+					{#if isGifImageSource(stateImage)}
 						<span class="badge badge-primary badge-sm">GIF</span>
 					{:else}
 						<span class="badge badge-neutral badge-sm">State {state + 1}</span>
@@ -96,56 +126,17 @@
 						resetImage();
 					}}
 				>
-					<img
-						src={getImage(instance.states[state].image, instance.action.states[state]?.image ?? instance.action.icon)}
-						class="mx-auto aspect-square w-full max-w-40 rounded-box border border-base-300 object-cover shadow-sm"
-						alt="State {state + 1} preview"
-					/>
+					<img src={stateImage} class="mx-auto aspect-square w-full max-w-40 rounded-box border border-base-300 object-cover shadow-sm" alt="State {state + 1} preview" />
 				</button>
-				<button type="button" on:click={() => fileInput.click()} class="btn btn-primary btn-sm mt-4 w-full">Choose image</button>
+				<button type="button" on:click={() => fileInput.click()} class="btn btn-primary btn-sm mt-4 w-full" data-testid="instance-editor-choose-image">Choose image</button>
 				<div class="mt-2 grid grid-cols-2 gap-2">
-					<button type="button" on:click={() => colourInput.click()} class="btn btn-sm">Solid colour</button>
-					<button type="button" on:click={resetImage} class="btn btn-ghost btn-sm">Reset</button>
+					<button type="button" on:click={() => colourInput.click()} class="btn btn-sm" data-testid="instance-editor-solid-colour">Solid colour</button>
+					<button type="button" on:click={resetImage} class="btn btn-ghost btn-sm" data-testid="instance-editor-reset">Reset</button>
 				</div>
 				<p class="ui-caption ui-muted mt-3 text-center">Animated GIFs are preserved. Right-click to reset.</p>
 			</aside>
-			<input
-				bind:this={fileInput}
-				type="file"
-				class="hidden"
-				accept="image/*"
-				on:change={async () => {
-					if (!fileInput.files || fileInput.files.length == 0) return;
-					const reader = new FileReader();
-
-					reader.onload = async () => {
-						let result = reader.result?.toString();
-						if (result) {
-							let resized = await resizeImage(result);
-							if (resized) instance.states[state].image = resized;
-							else instance.states[state].image = result;
-						}
-					};
-
-					reader.readAsDataURL(fileInput.files[0]);
-				}}
-			/>
-			<input
-				bind:this={colourInput}
-				type="color"
-				class="sr-only"
-				value="#FFFFFE"
-				on:change={() => {
-					const canvas = document.createElement("canvas");
-					canvas.width = 1;
-					canvas.height = 1;
-					const context = canvas.getContext("2d");
-					if (!context) return;
-					context.fillStyle = colourInput.value;
-					context.fillRect(0, 0, canvas.width, canvas.height);
-					instance.states[state].image = canvas.toDataURL("image/png");
-				}}
-			/>
+			<input bind:this={fileInput} type="file" class="hidden" accept="image/*" on:change={onImageFileChange} />
+			<input bind:this={colourInput} type="color" class="sr-only" value="#FFFFFE" on:change={onColourChange} />
 
 			<div class="flex min-w-0 flex-col gap-4">
 				<section class="ui-surface p-4">
@@ -156,12 +147,13 @@
 						</div>
 						<label class="flex shrink-0 cursor-pointer items-center gap-2">
 							<span class="ui-label">Show text</span>
-							<input type="checkbox" bind:checked={instance.states[state].show} class="toggle toggle-primary toggle-sm" />
+							<input data-testid="instance-editor-show-text" type="checkbox" bind:checked={instance.states[state].show} class="toggle toggle-primary toggle-sm" />
 						</label>
 					</div>
 					<label class="form-control">
 						<span class="label-text mb-1">Text</span>
-						<textarea bind:value={instance.states[state].text} rows="3" placeholder="Enter state label" class="textarea textarea-bordered w-full resize-none"></textarea>
+						<textarea data-testid="instance-editor-text" bind:value={instance.states[state].text} rows="3" placeholder="Enter state label" class="textarea textarea-bordered w-full resize-none"
+						></textarea>
 					</label>
 				</section>
 
@@ -175,16 +167,9 @@
 							<span class="label-text mb-1">Font family</span>
 							<input list="families" bind:value={instance.states[state].family} placeholder="Font family" class="input input-bordered input-sm w-full" />
 							<datalist id="families">
-								<option value="Pixeloid Sans">Pixeloid Sans (Pixel)</option>
-								<option value="Liberation Sans">Liberation Sans</option>
-								<option value="Archivo Black">Archivo Black</option>
-								<option value="Comic Neue">Comic Neue</option>
-								<option value="Courier Prime">Courier Prime</option>
-								<option value="Tinos">Tinos</option>
-								<option value="Anton">Anton</option>
-								<option value="Liberation Serif">Liberation Serif</option>
-								<option value="Open Sans">Open Sans</option>
-								<option value="Fira Sans">Fira Sans</option>
+								{#each FONT_FAMILIES as [value, label]}
+									<option {value}>{label}</option>
+								{/each}
 							</datalist>
 						</label>
 						<label class="form-control">
@@ -242,7 +227,7 @@
 
 		<footer class="flex shrink-0 items-center gap-3 border-t border-base-300 bg-base-200/50 px-5 py-3">
 			<p class="ui-caption ui-muted">Changes are applied immediately.</p>
-			<button type="button" class="btn btn-primary btn-sm ml-auto min-w-24" on:click={() => (showEditor = false)}>Done</button>
+			<button type="button" class="btn btn-primary btn-sm ml-auto min-w-24" data-testid="instance-editor-done" on:click={() => (showEditor = false)}>Done</button>
 		</footer>
 	</div>
 </div>

@@ -15,6 +15,10 @@ on:
       - "src/**"
       - "plugins/**"
       - "tests/**"
+      - "e2e/**"
+      - "shared/**"
+      - "playwright.config.ts"
+      - ".qlty/**"
     branches:
       - main
     types: ["opened", "synchronize", "reopened"]
@@ -27,15 +31,19 @@ jobs:
   lint-app:
     name: Lint app
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/mistweaverco/opendeck-ajazz-ci:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev xdg-utils
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Cache Bun
@@ -51,3 +59,39 @@ jobs:
 
       - name: Lint app
         run: ./scripts/lint-app.sh
+
+  e2e:
+    name: Playwright e2e
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright browser
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        run: bun run test:e2e
+
+  qlty:
+    name: Qlty smells
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install qlty
+        uses: qltysh/qlty-action/install@v2
+
+      - name: Check smells
+        run: qlty smells -a --no-snippets

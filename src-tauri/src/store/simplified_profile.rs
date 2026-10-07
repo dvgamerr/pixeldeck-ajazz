@@ -70,49 +70,64 @@ pub struct DiskActionInstance {
 	pub children: Option<Vec<DiskActionInstance>>,
 }
 
+const EMPTY_DATA_URL_PLACEHOLDER: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIW2NgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==";
+
+fn normalise_image_path(value: &str, image_dir: &Path, config_dir: &Path) -> String {
+	let path = Path::new(value);
+	if let Ok(relative) = path.strip_prefix(image_dir) {
+		relative.to_slash_lossy().into_owned()
+	} else if let Ok(relative) = path.strip_prefix(config_dir) {
+		relative.to_slash_lossy().into_owned()
+	} else {
+		path.to_slash_lossy().into_owned()
+	}
+}
+
+fn data_url_extension(image: &str) -> &str {
+	let mut extension = image.split_once('/').unwrap().1.split_once(',').unwrap().0;
+	if let Some((before, _)) = extension.split_once(';') {
+		extension = before;
+	}
+	if let Some((before, _)) = extension.split_once('+') {
+		extension = before;
+	}
+	extension
+}
+
+fn decode_data_url_payload(image: &str) -> Option<Vec<u8>> {
+	let Some((_, encoded)) = image.split_once(";base64,") else {
+		return Some(image.split_once(',').unwrap().1.as_bytes().to_vec());
+	};
+	use base64::Engine;
+	base64::engine::general_purpose::STANDARD.decode(encoded).ok()
+}
+
+/// Writes an inline `data:` image into `image_dir` and returns its file name,
+/// or `None` if it could not be decoded or written.
+fn persist_data_url_image(image: &str, index: usize, image_dir: &Path) -> Option<String> {
+	let extension = data_url_extension(image);
+	let data = decode_data_url_payload(image)?;
+	let filename = format!("{}.{}", index, extension);
+	if fs::create_dir_all(image_dir).is_err() || fs::write(image_dir.join(&filename), data).is_err() {
+		return None;
+	}
+	Some(filename)
+}
+
 impl From<ActionInstance> for DiskActionInstance {
 	fn from(mut value: ActionInstance) -> Self {
 		let disk_context: DiskActionContext = value.context.clone().into();
 		let config_dir = crate::shared::config_dir();
 		let image_dir = config_dir.join("images").join(&value.context.device).join(&value.context.profile).join(disk_context.to_string());
-
-		let normalise_path = |value: &str| -> String {
-			let path = Path::new(value);
-			if path.starts_with(&image_dir) {
-				path.strip_prefix(&image_dir).unwrap().to_slash_lossy().into_owned()
-			} else if path.starts_with(&config_dir) {
-				path.strip_prefix(&config_dir).unwrap().to_slash_lossy().into_owned()
-			} else {
-				path.to_slash_lossy().into_owned()
-			}
-		};
+		let normalise_path = |value: &str| normalise_image_path(value, &image_dir, &config_dir);
 
 		for (index, state) in value.states.iter_mut().enumerate() {
 			if state.image.trim() == "data:" {
-				state.image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIW2NgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==".to_owned();
+				state.image = EMPTY_DATA_URL_PLACEHOLDER.to_owned();
 			}
 
 			if state.image.starts_with("data:") {
-				let mut extension = state.image.split_once('/').unwrap().1.split_once(',').unwrap().0;
-				if extension.contains(';') {
-					extension = extension.split_once(';').unwrap().0;
-				}
-				if extension.contains('+') {
-					extension = extension.split_once('+').unwrap().0;
-				}
-
-				let data = if state.image.contains(";base64,") {
-					use base64::Engine;
-					let Ok(data) = base64::engine::general_purpose::STANDARD.decode(state.image.split_once(";base64,").unwrap().1) else {
-						continue;
-					};
-					data
-				} else {
-					state.image.split_once(',').unwrap().1.as_bytes().to_vec()
-				};
-
-				let filename = format!("{}.{}", index, extension);
-				if fs::create_dir_all(&image_dir).is_err() || fs::write(image_dir.join(&filename), data).is_err() {
+				let Some(filename) = persist_data_url_image(&state.image, index, &image_dir) else {
 					continue;
 				};
 				state.image = filename;

@@ -14,6 +14,7 @@ use thiserror::Error;
 mod info;
 mod images;
 mod device;
+mod input_state;
 mod protocol;
 mod hid;
 #[cfg(target_os = "windows")]

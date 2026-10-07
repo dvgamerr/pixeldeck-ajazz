@@ -38,13 +38,13 @@
 <svelte:window on:contextmenu|preventDefault on:dragover={(event) => event.preventDefault()} on:drop={(event) => event.preventDefault()} />
 
 {#if servicesReady}
-	<main class="relative flex min-h-0 min-w-0 flex-col bg-base-200">
+	<main data-testid="app-main" class="relative flex min-h-0 min-w-0 flex-col bg-base-200">
 		<header class="navbar ui-toolbar shrink-0 border-b border-base-300 bg-base-100">
 			<div class="min-w-0">
 				<div class="flex items-center gap-2">
-					<h1 class="ui-title truncate">{activeDevice?.name ?? "OpenDeck"}</h1>
+					<h1 data-testid="device-title" class="ui-title truncate">{activeDevice?.name ?? "OpenDeck"}</h1>
 					{#if activeDevice}
-						<span class="badge badge-success badge-sm gap-1">
+						<span data-testid="device-connected-badge" class="badge badge-success badge-sm gap-1">
 							<span class="status status-success"></span>
 							Connected
 						</span>
@@ -58,7 +58,7 @@
 			</div>
 		</header>
 
-		<section class="device-workspace relative flex min-h-0 flex-1 items-center justify-center overflow-visible">
+		<section data-testid="device-workspace" class="device-workspace relative flex min-h-0 flex-1 items-center justify-center overflow-visible">
 			{#if Object.keys(devices).length > 0 && selectedProfiles}
 				{#if $inspectedParentAction}
 					<ParentActionView bind:profile={selectedProfiles[selectedDevice]} />
@@ -75,15 +75,17 @@
 		</section>
 
 		{#if activeDevice && activeProfile}
-			{#if $inspectedInstance}
-				<section class="absolute inset-x-0 bottom-0 z-20 flex h-96 min-h-0 overflow-hidden border-t border-base-300 bg-base-100 shadow-lg">
-					<PropertyInspectorView bind:device={activeDevice} bind:profile={activeProfile} />
-				</section>
-			{/if}
+			<section
+				data-testid="property-inspector-panel"
+				class="absolute inset-x-0 bottom-0 z-20 flex h-96 min-h-0 overflow-hidden border-t border-base-300 bg-base-100 shadow-lg"
+				class:hidden={!$inspectedInstance}
+			>
+				<PropertyInspectorView bind:device={activeDevice} bind:profile={activeProfile} />
+			</section>
 		{/if}
 	</main>
 
-	<aside class="flex h-full min-h-0 w-full flex-col border-l border-base-300 bg-base-100">
+	<aside data-testid="sidebar" class="flex h-full min-h-0 w-full flex-col border-l border-base-300 bg-base-100">
 		<div class="ui-section-pad shrink-0 space-y-2 border-b border-base-300">
 			<p class="ui-eyebrow">Device</p>
 			{#if !$inspectedParentAction}

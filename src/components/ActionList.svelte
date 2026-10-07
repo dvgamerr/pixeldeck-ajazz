@@ -52,28 +52,44 @@
 	}
 </script>
 
-<div class="flex min-h-0 w-full flex-1 flex-col overflow-hidden">
+<div class="flex min-h-0 w-full flex-1 flex-col overflow-hidden" data-testid="action-list">
 	<div class="ui-section-pad shrink-0 space-y-2 border-b border-base-300">
 		<label class="input input-sm w-full bg-base-200 focus-within:input-primary">
 			<MagnifyingGlass size="15" class="shrink-0 opacity-60" color="currentColor" />
-			<input bind:value={query} class="grow" placeholder="Search actions" type="search" spellcheck="false" />
+			<input data-testid="action-search" bind:value={query} class="grow" placeholder="Search actions" type="search" spellcheck="false" />
 		</label>
-		<div class="tabs tabs-box grid grid-cols-2" role="tablist" aria-label="Action controller">
-			<button type="button" role="tab" class="tab gap-2" class:tab-active={controller == "Keypad"} on:click={() => (controller = "Keypad")}>
+		<div class="tabs tabs-box grid grid-cols-2" data-testid="action-tabs" role="tablist" aria-label="Action controller">
+			<button
+				type="button"
+				role="tab"
+				class="tab gap-2"
+				class:tab-active={controller == "Keypad"}
+				data-testid="action-tab-keys"
+				aria-selected={controller == "Keypad"}
+				on:click={() => (controller = "Keypad")}
+			>
 				<span class="h-3.5 w-3.5 rounded-[4px] border-2 border-current"></span>
 				Keys
 			</button>
-			<button type="button" role="tab" class="tab gap-2" class:tab-active={controller == "Encoder"} on:click={() => (controller = "Encoder")}>
+			<button
+				type="button"
+				role="tab"
+				class="tab gap-2"
+				class:tab-active={controller == "Encoder"}
+				data-testid="action-tab-dials"
+				aria-selected={controller == "Encoder"}
+				on:click={() => (controller = "Encoder")}
+			>
 				<span class="h-3.5 w-3.5 rounded-full border-2 border-current"></span>
 				Dials
 			</button>
 		</div>
 	</div>
 
-	<ul class="menu min-h-0 w-full flex-1 flex-nowrap overflow-x-hidden overflow-y-auto p-2 select-none">
+	<ul data-testid="action-categories" class="menu min-h-0 w-full flex-1 flex-nowrap overflow-x-hidden overflow-y-auto p-2 select-none">
 		{#each filteredCategories as [name, { icon, actions }]}
 			<li>
-				<details open>
+				<details open data-testid="action-category" data-category={name}>
 					<summary class="ui-label">
 						{#if icon || (actions[0] && plugins.find((x) => x.id == actions[0].plugin) && categories[name].actions.every((x) => x.plugin == actions[0].plugin))}
 							<img
@@ -89,6 +105,8 @@
 							<li>
 								<button
 									type="button"
+									data-testid="action-item"
+									data-action-uuid={action.uuid}
 									class="cursor-grab gap-2 py-1.5 active:cursor-grabbing"
 									draggable="true"
 									title={$localisations?.[action.plugin]?.[action.uuid]?.Tooltip ?? action.tooltip}

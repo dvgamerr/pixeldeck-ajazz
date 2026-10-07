@@ -60,36 +60,27 @@ pub async fn list_plugins(app: AppHandle) -> Result<Vec<PluginInfo>, Error> {
 	Ok(plugins)
 }
 
-#[command]
-pub async fn install_plugin(app: AppHandle, url: Option<String>, file: Option<String>, fallback_id: Option<String>) -> Result<(), Error> {
-	let bytes = match file {
-		None => {
-			let resp = match reqwest::get(url.unwrap()).await {
-				Ok(resp) => resp,
-				Err(error) => return Err(anyhow::Error::from(error).into()),
-			};
-			use std::ops::Deref;
-			match resp.bytes().await {
-				Ok(bytes) => bytes.deref().to_owned(),
-				Err(error) => return Err(anyhow::Error::from(error).into()),
-			}
-		}
-		Some(path) => match std::fs::read(path) {
-			Ok(bytes) => bytes,
-			Err(error) => return Err(anyhow::Error::from(error).into()),
-		},
-	};
+async fn fetch_plugin_bytes(url: Option<String>, file: Option<String>) -> Result<Vec<u8>, anyhow::Error> {
+	match file {
+		Some(path) => Ok(std::fs::read(path)?),
+		None => Ok(reqwest::get(url.unwrap()).await?.bytes().await?.to_vec()),
+	}
+}
 
-	let id = match crate::zip_extract::dir_name(std::io::Cursor::new(&bytes)) {
+fn resolve_plugin_id(bytes: &[u8], fallback_id: Option<String>) -> Result<String, anyhow::Error> {
+	match crate::zip_extract::dir_name(std::io::Cursor::new(bytes)) {
 		Ok(id) => {
 			log::trace!("Found directory with name {id} within archive");
-			id
+			Ok(id)
 		}
-		Err(error) => match fallback_id {
-			Some(id) => format!("{id}.sdPlugin"),
-			None => return Err(anyhow::Error::from(error).into()),
-		},
-	};
+		Err(error) => fallback_id.map(|id| format!("{id}.sdPlugin")).ok_or_else(|| anyhow::Error::from(error)),
+	}
+}
+
+#[command]
+pub async fn install_plugin(app: AppHandle, url: Option<String>, file: Option<String>, fallback_id: Option<String>) -> Result<(), Error> {
+	let bytes = fetch_plugin_bytes(url, file).await?;
+	let id = resolve_plugin_id(&bytes, fallback_id)?;
 
 	let _ = crate::plugins::deactivate_plugin(&app, &id).await;
 

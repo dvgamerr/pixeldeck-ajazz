@@ -3,11 +3,8 @@
 	import type { ActionState } from "$lib/ActionState";
 	import { contextsEqual, type Context } from "$lib/Context";
 
-	import Clipboard from "phosphor-svelte/lib/Clipboard";
-	import Copy from "phosphor-svelte/lib/Copy";
-	import Pencil from "phosphor-svelte/lib/Pencil";
-	import Trash from "phosphor-svelte/lib/Trash";
 	import InstanceEditor from "./InstanceEditor.svelte";
+	import KeyContextMenu from "./KeyContextMenu.svelte";
 	import LoadingSquares from "./LoadingSquares.svelte";
 
 	import { isGifImageSource } from "$lib/imageFormat";
@@ -61,22 +58,12 @@
 	async function contextMenu(event: MouseEvent) {
 		event.preventDefault();
 		if (!active || !context) return;
-		const width = 128;
+		const width = 144;
 		const height = slot ? 120 : 44;
 		$openContextMenu = {
 			context,
 			x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)),
 			y: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8)),
-		};
-	}
-
-	function portalToBody(node: HTMLElement) {
-		document.body.appendChild(node);
-
-		return {
-			destroy() {
-				node.remove();
-			},
 		};
 	}
 
@@ -232,7 +219,7 @@
 			const unlock = await lock.lock();
 			try {
 				if (generation != renderGeneration) return undefined;
-				const rendered = await renderImage(canvas, renderState, fallback, currentShowOk, currentShowAlert, true, currentPressed, sourceImage);
+				const rendered = await renderImage({ canvas, state: renderState, fallback, showOk: currentShowOk, showAlert: currentShowAlert, processImage: true, pressed: currentPressed, sourceImage });
 				sourceImage = rendered.image;
 				missingIcon = rendered.iconUnavailable;
 			} finally {
@@ -283,8 +270,15 @@
 	}
 </script>
 
-<div class="relative inline-block">
+<div
+	class="relative inline-block"
+	data-testid="device-{resolvedAppearance}-{context?.position}"
+	data-controller={context?.controller}
+	data-position={context?.position}
+	data-occupied={slot ? "true" : "false"}
+>
 	<canvas
+		data-testid="key-canvas"
 		bind:this={canvas}
 		class={`key-canvas key-canvas--${resolvedAppearance} relative block outline-none outline-offset-2 outline-primary`}
 		class:-m-2={resolvedAppearance != "touch"}
@@ -313,20 +307,7 @@
 </div>
 
 {#if $openContextMenu && contextsEqual($openContextMenu.context, context)}
-	<ul use:portalToBody class="menu fixed z-[1000] w-36 rounded-box border border-base-300 bg-base-100 p-1 shadow-lg" style={`left: ${$openContextMenu.x}px; top: ${$openContextMenu.y}px;`}>
-		{#if !slot}
-			<li>
-				<button type="button" on:click={paste}>
-					<Clipboard size="18" />
-					Paste
-				</button>
-			</li>
-		{:else}
-			<li><button type="button" on:click={edit}><Pencil size="18" />Edit</button></li>
-			<li><button type="button" on:click={() => copiedContext.set(context)}><Copy size="18" />Copy</button></li>
-			<li><button type="button" class="text-error" on:click={clear}><Trash size="18" />Delete</button></li>
-		{/if}
-	</ul>
+	<KeyContextMenu x={$openContextMenu.x} y={$openContextMenu.y} occupied={!!slot} onPaste={paste} onEdit={edit} onCopy={() => copiedContext.set(context)} onDelete={clear} />
 {/if}
 
 {#if slot && showEditor}

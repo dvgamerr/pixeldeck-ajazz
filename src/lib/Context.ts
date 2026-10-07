@@ -6,5 +6,7 @@ export type Context = {
 };
 
 export function contextsEqual(left: Context | null | undefined, right: Context | null | undefined): boolean {
-	return left === right || (!!left && !!right && left.device == right.device && left.profile == right.profile && left.controller == right.controller && left.position == right.position);
+	if (left === right) return true;
+	if (!left || !right) return false;
+	return left.device == right.device && left.profile == right.profile && left.controller == right.controller && left.position == right.position;
 }
