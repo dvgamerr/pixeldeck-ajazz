@@ -13,12 +13,12 @@ Status legend: [ ] todo, [~] in progress, [x] done
 - [x] 1.1 Categorise findings (size, duplication, dead code, unwrap, CSS duplication, docs drift)
 - [x] 1.2 Order modules by hardware risk
 
-## Phase 2 - Refactor (one commit per module)  [~]
-- [ ] 2.1 Frontend lib
-- [ ] 2.2 Svelte components
-- [ ] 2.3 Rust app (src-tauri/src)
-- [ ] 2.4 ajazz-sdk (behaviour must not change, see CLAUDE.md)
-- [ ] 2.5 plugins (starterpack, widgets)
+## Phase 2 - Refactor (one commit per module)  [x]
+- [x] 2.1 Frontend lib
+- [x] 2.2 Svelte components
+- [x] 2.3 Rust app (src-tauri/src)
+- [x] 2.4 ajazz-sdk (behaviour must not change, see CLAUDE.md)
+- [x] 2.5 plugins (starterpack, widgets)
 
 ## Phase 3 - Clear qlty  [ ]
 - [ ] 3.1 smells -a -> 0
@@ -44,3 +44,4 @@ Status legend: [ ] todo, [~] in progress, [x] done
 - Phase 1 findings = qlty baseline above; risk order: frontend -> src-tauri/src -> sdk/plugins. Phase 2 running as 3 parallel workstreams (frontend / src-tauri app / sdk+plugins).
 - [x] 2.4/2.5 ajazz-sdk (input_state.rs split) and plugins (shared/svg_text.rs, audio/system_monitor submodules) done; sdk 18 tests, starterpack 21, widgets 6 pass. Remaining: curve_to (trait-fixed 6 params) -> handle in Phase 3.
 - [x] 2.1/2.2 frontend done and committed (rendererHelper options object, startupImage/profileFolders/plugins libs, KeyContextMenu etc., data-testid added). Known gap: PropertyInspectorView still mounted via {#if} in +page.svelte (CLAUDE.md says toggle visibility) -> fix after Playwright specs exist. Phase 4 agent started.
+- [x] 2.3 src-tauri/src refactor done (main/ajazz/watcher/plugins/store split), clippy clean, 19 tests. plugins/shared moved to repo-root shared/ because src-tauri/build.rs treats every dir under plugins/ as a plugin.
