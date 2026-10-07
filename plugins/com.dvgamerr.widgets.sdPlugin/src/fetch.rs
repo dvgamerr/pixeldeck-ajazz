@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 use regex::Regex;
-use reqwest::{Client, Url};
+use reqwest::{Client, Response, Url};
 use serde_json::Value as SettingsValue;
 use serde_json::Value;
 use std::{sync::LazyLock, time::Duration};
@@ -32,6 +32,27 @@ static AQI_STRICT: LazyLock<Regex> = LazyLock::new(|| {
 });
 static AQI_VALUE: LazyLock<Regex> =
 	LazyLock::new(|| Regex::new(r#">\s*([0-9]{1,3})\s*<"#).unwrap());
+
+/// A refresh that produced no data.
+#[derive(Clone)]
+pub struct Failure {
+	pub message: String,
+	/// The source was never reached — the machine is offline or the upstream API is
+	/// down — rather than the widget being misconfigured. Those refreshes are skipped
+	/// silently so a dropped connection never repaints a working widget.
+	pub unreachable: bool,
+}
+
+impl From<anyhow::Error> for Failure {
+	fn from(error: anyhow::Error) -> Self {
+		Self {
+			// Every reqwest failure is a transport or HTTP-status problem; bad settings
+			// surface as our own `bail!`/`anyhow!` messages instead.
+			unreachable: error.chain().any(|cause| cause.is::<reqwest::Error>()),
+			message: format!("{error:#}"),
+		}
+	}
+}
 
 pub async fn widget(kind: ActionKind, settings: &SettingsValue) -> Result<WidgetData> {
 	match kind {
@@ -95,8 +116,13 @@ async fn yahoo_chart(symbol: &str, interval: &str, range: &str) -> Result<Value>
 	for host in ["query1.finance.yahoo.com", "query2.finance.yahoo.com"] {
 		let url =
 			format!("https://{host}/v8/finance/chart/{symbol}?interval={interval}&range={range}");
-		match CLIENT.get(url).send().await {
-			Ok(response) if response.status().is_success() => {
+		match CLIENT
+			.get(url)
+			.send()
+			.await
+			.and_then(Response::error_for_status)
+		{
+			Ok(response) => {
 				payload = Some(
 					response
 						.json::<Value>()
@@ -105,10 +131,10 @@ async fn yahoo_chart(symbol: &str, interval: &str, range: &str) -> Result<Value>
 				);
 				break;
 			}
-			Ok(response) => {
-				last_error = Some(anyhow!("Yahoo Finance returned {}", response.status()))
+			Err(error) => {
+				last_error =
+					Some(anyhow::Error::from(error).context("Yahoo Finance request failed"))
 			}
-			Err(error) => last_error = Some(error.into()),
 		}
 	}
 	let payload = payload
@@ -357,6 +383,22 @@ async fn fetch_weather(settings: &SettingsValue) -> Result<WeatherData> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[tokio::test]
+	async fn transport_failures_are_skippable_but_bad_settings_are_not() {
+		let refused = CLIENT
+			.get("http://127.0.0.1:1/")
+			.send()
+			.await
+			.expect_err("a closed port must not answer");
+		let refused = Failure::from(anyhow::Error::from(refused).context("request failed"));
+		assert!(refused.unreachable);
+
+		let rejected = fetch_currency(&serde_json::json!({ "from": "US1", "to": "THB" }))
+			.await
+			.expect_err("a non-alphabetic currency must be rejected before any request");
+		assert!(!Failure::from(rejected).unreachable);
+	}
 
 	#[test]
 	fn parses_the_iqair_badge_shape_used_by_the_source_widget() {

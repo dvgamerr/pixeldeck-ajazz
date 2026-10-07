@@ -8,7 +8,7 @@ use std::{
 use tokio::task::JoinHandle;
 
 use crate::{
-	fetch,
+	fetch::{self, Failure},
 	model::{ActionKind, WidgetData, setting_f64, setting_string},
 	render,
 };
@@ -22,6 +22,7 @@ struct Entry {
 	generation: u64,
 	next_due: Instant,
 	busy: bool,
+	unreachable_since: u32,
 	data: Option<WidgetData>,
 	last_image: Option<String>,
 }
@@ -122,6 +123,7 @@ pub async fn appear(
 				generation: 0,
 				next_due: Instant::now(),
 				busy: false,
+				unreachable_since: 0,
 				data,
 				last_image: Some(image.clone()),
 			},
@@ -151,6 +153,7 @@ pub fn update(context: &str, settings: SettingsValue) -> Option<String> {
 	entry.settings = settings;
 	entry.generation = entry.generation.wrapping_add(1);
 	entry.next_due = Instant::now();
+	entry.unreachable_since = 0;
 	entry.data = data;
 	entry.last_image = Some(image.clone());
 	Some(image)
@@ -159,6 +162,7 @@ pub fn update(context: &str, settings: SettingsValue) -> Option<String> {
 pub fn refresh(context: &str) {
 	if let Some(entry) = RUNTIME.lock().unwrap().entries.get_mut(context) {
 		entry.next_due = Instant::now();
+		entry.unreachable_since = 0;
 	}
 }
 
@@ -225,7 +229,7 @@ async fn scheduler() {
 			tokio::spawn(async move {
 				let result = fetch::widget(group.kind, &group.settings)
 					.await
-					.map_err(|error| format!("{error:#}"));
+					.map_err(Failure::from);
 				for (context, generation) in group.targets {
 					finish(context, generation, result.clone()).await;
 				}
@@ -234,7 +238,16 @@ async fn scheduler() {
 	}
 }
 
-async fn finish(context: String, generation: u64, result: Result<WidgetData, String>) {
+/// Spread out retries while a source stays unreachable so a machine that lost its
+/// connection is not dialled on every scheduler tick, without ever retrying more
+/// often than the widget's configured interval.
+fn retry_delay(kind: ActionKind, settings: &SettingsValue, attempts: u32) -> Duration {
+	const CEILING: Duration = Duration::from_secs(300);
+	let interval = kind.refresh_interval(settings);
+	interval.max(interval.saturating_mul(attempts.min(8)).min(CEILING))
+}
+
+async fn finish(context: String, generation: u64, result: Result<WidgetData, Failure>) {
 	let image = {
 		let mut runtime = RUNTIME.lock().unwrap();
 		let mut cache_update = None;
@@ -249,14 +262,34 @@ async fn finish(context: String, generation: u64, result: Result<WidgetData, Str
 			}
 			let image = match result {
 				Ok(data) => {
+					entry.unreachable_since = 0;
 					let image = render::widget(entry.kind, &data, &entry.settings);
 					cache_update = Some((cache_key(entry.kind, &entry.settings), data.clone()));
 					entry.data = Some(data);
 					Some(image)
 				}
-				Err(error) => {
-					log::warn!("{:?} refresh failed for {context}: {error}", entry.kind);
-					entry.data.is_none().then(|| render::error(&error))
+				Err(failure) if failure.unreachable => {
+					entry.unreachable_since = entry.unreachable_since.saturating_add(1);
+					entry.next_due = Instant::now()
+						+ retry_delay(entry.kind, &entry.settings, entry.unreachable_since);
+					log::debug!(
+						"{:?} refresh skipped for {context}: {}",
+						entry.kind,
+						failure.message
+					);
+					entry.data.is_none().then(|| render::offline(entry.kind))
+				}
+				Err(failure) => {
+					entry.unreachable_since = 0;
+					log::warn!(
+						"{:?} refresh failed for {context}: {}",
+						entry.kind,
+						failure.message
+					);
+					entry
+						.data
+						.is_none()
+						.then(|| render::error(&failure.message))
 				}
 			};
 			image.and_then(|image| {
@@ -290,6 +323,9 @@ mod tests {
 	use crate::model::CurrencyData;
 	use serde_json::json;
 
+	/// `RUNTIME` is process-wide, so the tests that reach for it take turns.
+	static EXCLUSIVE: Mutex<()> = Mutex::new(());
+
 	#[test]
 	fn cached_frame_replaces_loading_after_context_disappears() {
 		let settings = json!({ "from": "USD", "to": "THB", "interval": 10_000 });
@@ -319,6 +355,7 @@ mod tests {
 
 	#[test]
 	fn identical_requests_share_one_scheduler_group() {
+		let _exclusive = EXCLUSIVE.lock();
 		let mut runtime = RUNTIME.lock().unwrap();
 		runtime.entries.clear();
 		for (context, interval) in [("one", 5_000), ("two", 60_000)] {
@@ -330,6 +367,7 @@ mod tests {
 					generation: 0,
 					next_due: Instant::now(),
 					busy: false,
+					unreachable_since: 0,
 					data: None,
 					last_image: None,
 				},
@@ -340,5 +378,64 @@ mod tests {
 		assert_eq!(jobs.len(), 1);
 		assert_eq!(jobs[0].targets.len(), 2);
 		RUNTIME.lock().unwrap().entries.clear();
+	}
+
+	#[tokio::test]
+	async fn an_unreachable_source_leaves_the_current_frame_alone() {
+		let _exclusive = EXCLUSIVE.lock();
+		let settings = json!({ "from": "USD", "to": "THB", "interval": 10_000 });
+		let shown = render::widget(
+			ActionKind::Currency,
+			&WidgetData::Currency(CurrencyData {
+				pair: "USDTHB".to_owned(),
+				price: 32.5,
+				change_percent: 0.25,
+			}),
+			&settings,
+		);
+		let offline = Failure {
+			message: "connection refused".to_owned(),
+			unreachable: true,
+		};
+
+		for (context, data) in [
+			(
+				"with-data",
+				Some(WidgetData::Currency(CurrencyData {
+					pair: "USDTHB".to_owned(),
+					price: 32.5,
+					change_percent: 0.25,
+				})),
+			),
+			("cold", None),
+		] {
+			RUNTIME.lock().unwrap().entries.insert(
+				context.to_owned(),
+				Entry {
+					kind: ActionKind::Currency,
+					settings: settings.clone(),
+					generation: 0,
+					next_due: Instant::now(),
+					busy: true,
+					unreachable_since: 0,
+					data,
+					last_image: Some(shown.clone()),
+				},
+			);
+			finish(context.to_owned(), 0, Err(offline.clone())).await;
+		}
+
+		let mut runtime = RUNTIME.lock().unwrap();
+		let with_data = runtime.entries.remove("with-data").unwrap();
+		assert_eq!(with_data.last_image.as_deref(), Some(shown.as_str()));
+		assert!(with_data.data.is_some());
+		assert!(with_data.next_due > Instant::now());
+
+		// A widget that has never had data says so instead of raising a data error.
+		let cold = runtime.entries.remove("cold").unwrap();
+		assert_eq!(
+			cold.last_image.as_deref(),
+			Some(render::offline(ActionKind::Currency).as_str())
+		);
 	}
 }

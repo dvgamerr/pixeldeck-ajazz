@@ -9,4 +9,4 @@ edition = "2021"
 image = { workspace = true }
 ajazz-sdk = { path = "../../" }
 scap = "0.0.8"
-rustyline = "14.0"
+rustyline = "18.0"

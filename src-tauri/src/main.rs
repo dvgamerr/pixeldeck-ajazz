@@ -217,7 +217,7 @@ async fn check_for_update() -> Result<(), anyhow::Error> {
 		.message(format!(
 			"A new version of {PRODUCT_NAME}, {}, is available.\nUpdate description:\n\n{}",
 			tag_name,
-			res.get("body").map(|v| v.as_str().unwrap()).unwrap_or("No description").trim()
+			res.get("body").and_then(serde_json::Value::as_str).unwrap_or("No description").trim()
 		))
 		.title(format!("{PRODUCT_NAME} update available"))
 		.show(|_| ());
@@ -265,7 +265,8 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 	if settings.value.updatecheck {
 		tokio::spawn(async {
 			if let Err(error) = check_for_update().await {
-				log::warn!("Failed to update application: {error}");
+				// Usually just a machine that is offline; skip the check silently.
+				log::debug!("Update check skipped: {error}");
 			}
 		});
 	}
