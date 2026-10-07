@@ -49,3 +49,13 @@ Status legend: [ ] todo, [~] in progress, [x] done
 - Phase 3 not fixed (infra, pre-existing): zizmor unpinned action/image refs and template-injection in release.yml, Dockerfile hadolint/radarlint findings, yamllint CRLF on working copy, qlty rustfmt "fmt" notes caused by CRLF working copies (cargo fmt --check passes on all 4 manifests), shellcheck CRLF (scripts/*.sh excluded; index is LF).
 - Phase 4 result: 96 Playwright tests (e2e/*.pw.ts) pass, twice-repeat stable. Run: `bun run test:e2e`. Fixed during this: context menu clamp width 128->144, property inspector now stays mounted (hidden class).
 - Phase 5: verify (format, check, lint, bun test 13, build), cargo clippy/test on 4 manifests, Playwright all green. Hardware acceptance (Registered Ajazz AKP05E_552A as sd-<serial>) NOT run - needs a physical device.
+
+## Phase 6 - Unit tests for every function (Playwright)  [~]
+Scope: all functions under src/lib (TS) and all Svelte component logic. Rust functions cannot be driven by Playwright; they stay on `cargo test` (separate decision).
+- [ ] 6.1 `playwright.unit.config.ts` + `unit/` (node, no browser) and `test:unit` script
+- [ ] 6.2 Pure/store functions in src/lib (node project)
+- [ ] 6.3 DOM/canvas-dependent lib functions (rendererHelper, startupImage, portal, ...) run in browser context
+- [ ] 6.4 Component behaviour gaps not covered by e2e (ParentActionView, NoDevicesDetected, InstanceEditor formatting, StartupImage editor, ReleaseAssetChooser, PluginDetails)
+- [ ] 6.5 Coverage report: list every exported function and its test; fill gaps
+- [ ] 6.6 CI job + docs
+Note: working tree had uncommitted user edits (product rename in package.json, tauri.conf, etc.) when Phase 6 started; they are left untouched.
