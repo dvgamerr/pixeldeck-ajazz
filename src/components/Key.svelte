@@ -58,7 +58,7 @@
 	async function contextMenu(event: MouseEvent) {
 		event.preventDefault();
 		if (!active || !context) return;
-		const width = 128;
+		const width = 144;
 		const height = slot ? 120 : 44;
 		$openContextMenu = {
 			context,

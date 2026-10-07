@@ -50,6 +50,6 @@ export default [
 		},
 	},
 	{
-		ignores: ["node_modules/**", "build/**", ".svelte-kit/**", "src-tauri/**", "plugins/**/src/**"],
+		ignores: ["node_modules/**", "build/**", ".svelte-kit/**", "src-tauri/**", "plugins/**/src/**", "test-results/**", "playwright-report/**"],
 	},
 ];

@@ -13,6 +13,7 @@
 		"format:check": "bun x --bun prettier --check \"src/**/*.{ts,svelte,css,html}\" \"plugins/**/*.{js,ts,html}\" \"*.{js,ts,json}\"",
 		"lint": "bun x --bun eslint .",
 		"test": "bun test",
+		"test:e2e": "bunx playwright test",
 		"verify": "bun run format:check && bun run check && bun run lint && bun test && bun run build",
 		"icon:generate": "pwsh -NoProfile -File scripts/generate-icons.ps1",
 		"installer:windows": "bun run tauri build --bundles nsis,msi",
@@ -22,6 +23,7 @@
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
+		"@playwright/test": "^1.63.0",
 		"@sveltejs/adapter-static": "^3.0.10",
 		"@sveltejs/kit": "^2.70.3",
 		"@sveltejs/vite-plugin-svelte": "^7.3.0",

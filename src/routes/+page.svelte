@@ -75,11 +75,13 @@
 		</section>
 
 		{#if activeDevice && activeProfile}
-			{#if $inspectedInstance}
-				<section data-testid="property-inspector-panel" class="absolute inset-x-0 bottom-0 z-20 flex h-96 min-h-0 overflow-hidden border-t border-base-300 bg-base-100 shadow-lg">
-					<PropertyInspectorView bind:device={activeDevice} bind:profile={activeProfile} />
-				</section>
-			{/if}
+			<section
+				data-testid="property-inspector-panel"
+				class="absolute inset-x-0 bottom-0 z-20 flex h-96 min-h-0 overflow-hidden border-t border-base-300 bg-base-100 shadow-lg"
+				class:hidden={!$inspectedInstance}
+			>
+				<PropertyInspectorView bind:device={activeDevice} bind:profile={activeProfile} />
+			</section>
 		{/if}
 	</main>
 
