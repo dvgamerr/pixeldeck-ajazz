@@ -65,17 +65,106 @@ export class CanvasLock {
 	}
 }
 
-export async function renderImage(
-	canvas: HTMLCanvasElement,
-	state: ActionState,
-	fallback: string | undefined,
-	showOk: boolean,
-	showAlert: boolean,
-	processImage: boolean,
-	pressed: boolean,
-	sourceImage?: HTMLImageElement,
-): Promise<{ image: HTMLImageElement | undefined; iconUnavailable: boolean }> {
-	// Create canvas
+export type RenderImageOptions = {
+	canvas: HTMLCanvasElement;
+	state: ActionState;
+	fallback?: string;
+	showOk?: boolean;
+	showAlert?: boolean;
+	processImage?: boolean;
+	pressed?: boolean;
+	sourceImage?: HTMLImageElement;
+};
+
+type RenderImageResult = { image: HTMLImageElement | undefined; iconUnavailable: boolean };
+
+function clearCanvas(context: CanvasRenderingContext2D, canvas: HTMLCanvasElement) {
+	context.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+async function drawBaseImage(context: CanvasRenderingContext2D, canvas: HTMLCanvasElement, { state, fallback, processImage, sourceImage }: RenderImageOptions): Promise<RenderImageResult> {
+	const resolvedSource = processImage ? getImage(state.image, fallback) : state.image;
+	// No icon configured, or the configured icon failed to decode. Report this back so the
+	// caller can show a loading animation in place of the alert icon instead of drawing it here.
+	if (resolvedSource == "/alert.png") {
+		clearCanvas(context, canvas);
+		return { image: undefined, iconUnavailable: true };
+	}
+	try {
+		const image = sourceImage ?? (await loadImage(resolvedSource));
+		clearCanvas(context, canvas);
+		context.imageSmoothingQuality = "high";
+		context.drawImage(image, 0, 0, canvas.width, canvas.height);
+		return { image, iconUnavailable: false };
+	} catch (error: any) {
+		if (!(error instanceof Event)) console.error(error);
+		clearCanvas(context, canvas);
+		return { image: undefined, iconUnavailable: true };
+	}
+}
+
+function buildFont(state: ActionState, size: number): string {
+	return (state.style.includes("Bold") ? "bold " : "") + (state.style.includes("Italic") ? "italic " : "") + `${size}px "${state.family}", sans-serif`;
+}
+
+function drawUnderline(context: CanvasRenderingContext2D, colour: string, x: number, y: number, width: number) {
+	// Set to black for the outline, since it uses the same fill style info as the text colour.
+	context.fillStyle = "black";
+	context.fillRect(x - width / 2 - 3, y, width + 6, 9);
+	// Reset to the user's choice of text colour.
+	context.fillStyle = colour;
+	context.fillRect(x - width / 2, y + 4, width, 3);
+}
+
+async function drawText(context: CanvasRenderingContext2D, canvas: HTMLCanvasElement, state: ActionState, scale: number) {
+	const size = state.size * 2 * scale;
+	context.textAlign = "center";
+	context.font = buildFont(state, size);
+	// Canvas may draw with the fallback if a bundled font has not loaded yet.
+	// Loading is cached by the browser after the first render.
+	await document.fonts.load(context.font).catch(() => []);
+	context.fillStyle = state.colour;
+	context.strokeStyle = "black";
+	context.lineWidth = 3 * scale;
+	context.textBaseline = "top";
+	const x = canvas.width / 2;
+	const lines = state.text.split("\n");
+	let y = canvas.height / 2 - size * lines.length * 0.5;
+	if (state.alignment === "top") y = -(size * 0.2);
+	else if (state.alignment === "bottom") y = canvas.height - size * lines.length - context.lineWidth;
+	lines.forEach((line, index) => {
+		const lineY = y + size * index;
+		context.strokeText(line, x, lineY);
+		context.fillText(line, x, lineY);
+		if (state.underline) drawUnderline(context, state.colour, x, lineY + size, context.measureText(line).width);
+	});
+}
+
+async function drawOverlay(context: CanvasRenderingContext2D, canvas: HTMLCanvasElement, source: string) {
+	const overlay = document.createElement("img");
+	overlay.crossOrigin = "anonymous";
+	overlay.src = source;
+	await new Promise((resolve) => {
+		overlay.onload = resolve;
+	});
+	context.drawImage(overlay, 0, 0, canvas.width, canvas.height);
+}
+
+// Make the image smaller while the button is pressed.
+function shrinkForPress(context: CanvasRenderingContext2D, canvas: HTMLCanvasElement) {
+	const smallCanvas = document.createElement("canvas");
+	smallCanvas.width = canvas.width;
+	smallCanvas.height = canvas.height;
+	const smallContext = smallCanvas.getContext("2d");
+	if (!smallContext) return;
+	const margin = 0.1;
+	smallContext.drawImage(canvas, canvas.width * margin, canvas.height * margin, canvas.width * (1 - margin * 2), canvas.height * (1 - margin * 2));
+	clearCanvas(context, canvas);
+	context.drawImage(smallCanvas, 0, 0);
+}
+
+export async function renderImage(options: RenderImageOptions): Promise<RenderImageResult> {
+	let { canvas } = options;
 	let scale = 1;
 	if (!canvas) {
 		canvas = document.createElement("canvas");
@@ -87,105 +176,13 @@ export async function renderImage(
 
 	const context = canvas.getContext("2d");
 	if (!context) return { image: undefined, iconUnavailable: false };
-	let renderedImage: HTMLImageElement | undefined;
-	// No icon configured, or the configured icon failed to decode. Report this back so the
-	// caller can show a loading animation in place of the alert icon instead of drawing it here.
-	let iconUnavailable = false;
 
-	const resolvedSource = processImage ? getImage(state.image, fallback) : state.image;
-	if (resolvedSource == "/alert.png") {
-		iconUnavailable = true;
-		context.clearRect(0, 0, canvas.width, canvas.height);
-	} else {
-		try {
-			// Load image
-			const image = sourceImage ?? (await loadImage(resolvedSource));
-			renderedImage = image;
-
-			// Draw image
-			context.clearRect(0, 0, canvas.width, canvas.height);
-			context.imageSmoothingQuality = "high";
-			context.drawImage(image, 0, 0, canvas.width, canvas.height);
-		} catch (error: any) {
-			if (!(error instanceof Event)) console.error(error);
-			renderedImage = undefined;
-			iconUnavailable = true;
-			context.clearRect(0, 0, canvas.width, canvas.height);
-		}
-	}
-
-	// Draw text
-	if (state.show) {
-		const size = state.size * 2 * scale;
-		context.textAlign = "center";
-		context.font = (state.style.includes("Bold") ? "bold " : "") + (state.style.includes("Italic") ? "italic " : "") + `${size}px "${state.family}", sans-serif`;
-		// Canvas may draw with the fallback if a bundled font has not loaded yet.
-		// Loading is cached by the browser after the first render.
-		await document.fonts.load(context.font).catch(() => []);
-		context.fillStyle = state.colour;
-		context.strokeStyle = "black";
-		context.lineWidth = 3 * scale;
-		context.textBaseline = "top";
-		const x = canvas.width / 2;
-		let y = canvas.height / 2 - size * state.text.split("\n").length * 0.5;
-		switch (state.alignment) {
-			case "top":
-				y = -(size * 0.2);
-				break;
-			case "bottom":
-				y = canvas.height - size * state.text.split("\n").length - context.lineWidth;
-				break;
-		}
-		for (const [index, line] of Object.entries(state.text.split("\n"))) {
-			context.strokeText(line, x, y + size * parseInt(index));
-			context.fillText(line, x, y + size * parseInt(index));
-			if (state.underline) {
-				const width = context.measureText(line).width;
-				// Set to black for the outline, since it uses the same fill style info as the text colour.
-				context.fillStyle = "black";
-				context.fillRect(x - width / 2 - 3, y + size * parseInt(index) + size, width + 6, 9);
-				// Reset to the user's choice of text colour.
-				context.fillStyle = state.colour;
-				context.fillRect(x - width / 2, y + size * parseInt(index) + size + 4, width, 3);
-			}
-		}
-	}
-
-	if (showOk) {
-		const okImage = document.createElement("img");
-		okImage.crossOrigin = "anonymous";
-		okImage.src = "/ok.png";
-		await new Promise((resolve) => {
-			okImage.onload = resolve;
-		});
-		context.drawImage(okImage, 0, 0, canvas.width, canvas.height);
-	}
-
-	if (showAlert) {
-		const alertImage = document.createElement("img");
-		alertImage.crossOrigin = "anonymous";
-		alertImage.src = "/alert.png";
-		await new Promise((resolve) => {
-			alertImage.onload = resolve;
-		});
-		context.drawImage(alertImage, 0, 0, canvas.width, canvas.height);
-	}
-
-	// Make the image smaller while the button is pressed.
-	if (pressed) {
-		const smallCanvas = document.createElement("canvas");
-		smallCanvas.width = canvas.width;
-		smallCanvas.height = canvas.height;
-		const newContext = smallCanvas.getContext("2d");
-		const margin = 0.1;
-		if (newContext) {
-			newContext.drawImage(canvas, canvas.width * margin, canvas.height * margin, canvas.width * (1 - margin * 2), canvas.height * (1 - margin * 2));
-			context.clearRect(0, 0, canvas.width, canvas.height);
-			context.drawImage(smallCanvas, 0, 0);
-		}
-	}
-
-	return { image: renderedImage, iconUnavailable };
+	const result = await drawBaseImage(context, canvas, options);
+	if (options.state.show) await drawText(context, canvas, options.state, scale);
+	if (options.showOk) await drawOverlay(context, canvas, "/ok.png");
+	if (options.showAlert) await drawOverlay(context, canvas, "/alert.png");
+	if (options.pressed) shrinkForPress(context, canvas);
+	return result;
 }
 
 export async function resizeImage(source: string): Promise<string | undefined> {

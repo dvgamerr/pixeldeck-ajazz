@@ -7,31 +7,25 @@
 	import Pencil from "phosphor-svelte/lib/Pencil";
 	import Trash from "phosphor-svelte/lib/Trash";
 	import X from "phosphor-svelte/lib/X";
+	import ApplicationProfilesPopup from "./ApplicationProfilesPopup.svelte";
 	import Popup from "./Popup.svelte";
+	import PopupHeader from "./PopupHeader.svelte";
 	import ProfileOptions from "./ProfileOptions.svelte";
 
 	import { invoke } from "@tauri-apps/api/core";
 	import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 	import { onMount } from "svelte";
+	import { cleanApplicationProfiles, type ApplicationProfiles } from "$lib/applicationProfiles";
+	import { addToFolders, makeFolders, type ProfileFolders } from "$lib/profileFolders";
 	import { copiedContext, inspectedInstance, inspectedParentAction, openContextMenu } from "$lib/propertyInspector";
 
-	let folders: { [name: string]: string[] } = {};
+	let folders: ProfileFolders = {};
 	let value: string;
 	let disposed = false;
 	let profileRequest = 0;
 	let profileManagerError = "";
 	let renamingProfile = "";
 	let renameValue = "";
-
-	function makeFolders(profiles: string[]) {
-		const nextFolders: { [name: string]: string[] } = {};
-		for (const id of profiles) {
-			const folder = id.includes("/") ? id.split("/")[0] : "";
-			if (nextFolders[folder]) nextFolders[folder].push(id);
-			else nextFolders[folder] = [id];
-		}
-		return nextFolders;
-	}
 
 	async function getProfiles(device: DeviceInfo) {
 		const request = ++profileRequest;
@@ -57,12 +51,7 @@
 		value = selected.id;
 		oldValue = selected.id;
 
-		const folder = selected.id.includes("/") ? selected.id.split("/")[0] : "";
-		if (folders[folder]) {
-			if (!folders[folder].includes(selected.id)) folders[folder].push(selected.id);
-		} else {
-			folders[folder] = [selected.id];
-		}
+		addToFolders(folders, selected.id);
 		folders = folders;
 	}
 
@@ -82,10 +71,7 @@
 			return;
 		}
 
-		let folder = id.includes("/") ? id.split("/")[0] : "";
-		if (folders[folder]) {
-			if (!folders[folder].includes(id)) folders[folder].push(id);
-		} else folders[folder] = [id];
+		addToFolders(folders, id);
 		folders = folders;
 	}
 
@@ -130,7 +116,7 @@
 			value = selected.id;
 			oldValue = selected.id;
 			renamingProfile = "";
-			const loadedProfiles = await invoke<{ [appName: string]: { [device: string]: string } }>("get_application_profiles");
+			const loadedProfiles = await invoke<ApplicationProfiles>("get_application_profiles");
 			applicationProfiles = cleanApplicationProfiles(loadedProfiles);
 			lastSavedApplicationProfiles = JSON.stringify(applicationProfiles);
 			await getProfiles(device);
@@ -155,22 +141,14 @@
 
 	let showApplicationManager: boolean = false;
 	let applications: string[] = [];
-	let applicationProfiles: { [appName: string]: { [device: string]: string } } = {};
+	let applicationProfiles: ApplicationProfiles = {};
 	let applicationProfilesLoaded = false;
 	let lastSavedApplicationProfiles = "";
 	let applicationProfilesSaving = false;
-	let pendingApplicationProfiles: { [appName: string]: { [device: string]: string } } | undefined;
+	let pendingApplicationProfiles: ApplicationProfiles | undefined;
 	let applicationProfilesError = "";
 
-	function cleanApplicationProfiles(value: { [appName: string]: { [device: string]: string } }) {
-		return Object.fromEntries(
-			Object.entries(value)
-				.map(([appName, devices]) => [appName, Object.fromEntries(Object.entries(devices).filter(([_, profile]) => profile))])
-				.filter(([_, devices]) => Object.keys(devices).length),
-		);
-	}
-
-	async function persistApplicationProfiles(value: { [appName: string]: { [device: string]: string } }) {
+	async function persistApplicationProfiles(value: ApplicationProfiles) {
 		pendingApplicationProfiles = cleanApplicationProfiles(value);
 		if (applicationProfilesSaving) return;
 
@@ -204,7 +182,7 @@
 		};
 
 		void getProfiles(device);
-		void Promise.all([invoke<string[]>("get_applications"), invoke<{ [appName: string]: { [device: string]: string } }>("get_application_profiles")])
+		void Promise.all([invoke<string[]>("get_applications"), invoke<ApplicationProfiles>("get_application_profiles")])
 			.then(([loadedApplications, loadedProfiles]) => {
 				if (disposed) return;
 				applications = loadedApplications;
@@ -237,21 +215,6 @@
 		};
 	});
 
-	let applicationsAddAppName: string = "opendeck_select_application";
-	let applicationsAddProfile: string = "opendeck_select_profile";
-	$: {
-		if (applicationsAddAppName != "opendeck_select_application" && applicationsAddProfile != "opendeck_select_profile") {
-			applicationProfiles = {
-				...applicationProfiles,
-				[applicationsAddAppName]: {
-					...applicationProfiles[applicationsAddAppName],
-					[device.id]: applicationsAddProfile,
-				},
-			};
-			applicationsAddAppName = "opendeck_select_application";
-			applicationsAddProfile = "opendeck_select_profile";
-		}
-	}
 	$: {
 		if (applicationProfilesLoaded) {
 			const cleaned = cleanApplicationProfiles(applicationProfiles);
@@ -264,7 +227,7 @@
 	}
 </script>
 
-<select bind:value class="select select-sm w-full" aria-label="Profile">
+<select bind:value class="select select-sm w-full" aria-label="Profile" data-testid="profile-selector">
 	<ProfileOptions {folders} />
 	<option value="opendeck_edit_profiles">Edit...</option>
 </select>
@@ -278,18 +241,13 @@
 	}}
 />
 
-<Popup show={showPopup}>
-	<header class="mb-3 flex items-center">
-		<div>
-			<p class="ui-eyebrow">Profiles</p>
-			<h2 class="ui-page-title">{device.name}</h2>
-		</div>
-		<button type="button" class="btn btn-circle btn-ghost btn-sm ml-auto" aria-label="Close profile manager" on:click={() => (showPopup = false)}>✕</button>
-	</header>
+<Popup show={showPopup} testid="profile-manager">
+	<PopupHeader eyebrow="Profiles" title={device.name} closeLabel="Close profile manager" onClose={() => (showPopup = false)} variant="compact" testid="profile-manager-header" />
 
 	<div class="join mb-3 flex w-full">
 		<input
 			bind:this={nameInput}
+			data-testid="profile-name-input"
 			pattern="[a-zA-Z0-9_ ]+(\/[a-zA-Z0-9_ ]+)?"
 			class="input input-bordered join-item grow invalid:input-error"
 			placeholder="Profile ID (e.g. &quot;folder/profile&quot;)"
@@ -297,6 +255,7 @@
 
 		<button
 			type="button"
+			data-testid="profile-create"
 			on:click={async () => {
 				if (!nameInput.checkValidity() || !nameInput.value) return;
 				await setProfile(nameInput.value);
@@ -309,25 +268,26 @@
 			Create
 		</button>
 
-		<button type="button" class="btn join-item" title="Manage application profiles" on:click={() => (showApplicationManager = true)}>
+		<button type="button" class="btn join-item" data-testid="profile-application-mapping" title="Manage application profiles" on:click={() => (showApplicationManager = true)}>
 			<Browsers size={24} />
 		</button>
 	</div>
 
 	{#if profileManagerError}
-		<div role="alert" class="alert alert-error mb-3 py-2 text-sm"><span>{profileManagerError}</span></div>
+		<div role="alert" class="alert alert-error mb-3 py-2 text-sm" data-testid="profile-manager-error"><span>{profileManagerError}</span></div>
 	{/if}
 
-	<div class="divide-y divide-base-300 rounded-box border border-base-300 bg-base-200 px-3">
+	<div class="divide-y divide-base-300 rounded-box border border-base-300 bg-base-200 px-3" data-testid="profile-list">
 		{#each Object.entries(folders) as [id, profiles]}
 			{#if id && profiles.length}
 				<h4 class="ui-eyebrow py-2">{id}</h4>
 			{/if}
 			{#each profiles as profile}
-				<div class="flex items-center gap-3 py-2" class:ml-6={id} class:pl-2={id}>
+				<div class="flex items-center gap-3 py-2" class:ml-6={id} class:pl-2={id} data-testid="profile-item" data-profile={profile}>
 					{#if renamingProfile == profile}
 						<input
 							class="input input-bordered input-sm min-w-0 flex-1"
+							data-testid="profile-rename-input"
 							pattern="[a-zA-Z0-9_ ]+(\/[a-zA-Z0-9_ ]+)?"
 							bind:value={renameValue}
 							aria-label={`Rename profile ${profile}`}
@@ -336,23 +296,23 @@
 								if (event.key == "Escape") renamingProfile = "";
 							}}
 						/>
-						<button type="button" class="btn btn-circle btn-primary btn-xs" aria-label="Save profile name" on:click={() => renameProfile(profile)}>
+						<button type="button" class="btn btn-circle btn-primary btn-xs" aria-label="Save profile name" data-testid="profile-rename-save" on:click={() => renameProfile(profile)}>
 							<Check size="15" weight="bold" />
 						</button>
-						<button type="button" class="btn btn-circle btn-ghost btn-xs" aria-label="Cancel rename" on:click={() => (renamingProfile = "")}>
+						<button type="button" class="icon-btn-xs" aria-label="Cancel rename" data-testid="profile-rename-cancel" on:click={() => (renamingProfile = "")}>
 							<X size="15" weight="bold" />
 						</button>
 					{:else}
 						<label class="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
-							<input type="radio" bind:group={value} value={profile} class="radio radio-primary radio-sm" />
+							<input type="radio" bind:group={value} value={profile} class="radio radio-primary radio-sm" data-testid="profile-radio" />
 							<span class="truncate">{id ? profile.split("/")[1] : profile}</span>
 						</label>
-						<button type="button" class="btn btn-circle btn-ghost btn-xs" aria-label={`Rename profile ${profile}`} on:click={() => beginRename(profile)}>
+						<button type="button" class="icon-btn-xs" aria-label={`Rename profile ${profile}`} data-testid="profile-rename" on:click={() => beginRename(profile)}>
 							<Pencil size="16" />
 						</button>
 					{/if}
 					{#if profile != value && renamingProfile != profile}
-						<button type="button" on:click={() => deleteProfile(profile)} class="btn btn-circle btn-ghost btn-xs text-error" aria-label="Delete profile">
+						<button type="button" on:click={() => deleteProfile(profile)} class="icon-btn-xs text-error" aria-label="Delete profile" data-testid="profile-delete">
 							<Trash size="18" />
 						</button>
 					{/if}
@@ -362,66 +322,4 @@
 	</div>
 </Popup>
 
-<Popup show={showApplicationManager}>
-	<header class="mb-3 flex items-center">
-		<div>
-			<p class="ui-eyebrow">Application mapping</p>
-			<h2 class="ui-page-title">{device.name}</h2>
-		</div>
-		<button type="button" class="btn btn-circle btn-ghost btn-sm ml-auto" aria-label="Close application mapping" on:click={() => (showApplicationManager = false)}>✕</button>
-	</header>
-	<div role="alert" class="alert mb-3">
-		<span>If an application is missing, switch to it and back. The previous profile is restored when a mapped application becomes inactive.</span>
-	</div>
-	{#if applicationProfilesError}
-		<div role="alert" class="alert alert-error mb-3"><span>{applicationProfilesError}</span></div>
-	{/if}
-
-	<div class="overflow-x-auto rounded-box border border-base-300">
-		<table class="table table-sm w-full">
-			<thead>
-				<tr><th>Application</th><th>Profile</th></tr>
-			</thead>
-			<tbody>
-				{#each Object.entries(applicationProfiles).sort((a, b) => (a[0] == "opendeck_default" ? -1 : b[0] == "opendeck_default" ? 1 : a[0].localeCompare(b[0]))) as [appName, devices]}
-					{#if devices[device.id]}
-						<tr>
-							<td>{appName == "opendeck_default" ? "Default profile" : appName}:</td>
-							<td>
-								<select bind:value={applicationProfiles[appName][device.id]} class="select select-sm w-full">
-									<ProfileOptions {folders} />
-									<option disabled>──────────</option>
-									<option value={undefined}>Remove application</option>
-								</select>
-							</td>
-						</tr>
-					{/if}
-				{/each}
-				<tr class="h-12">
-					<td class="w-48">
-						<select bind:value={applicationsAddAppName} class="select select-sm w-full">
-							<option selected disabled value="opendeck_select_application">Select application...</option>
-							{#if !applicationProfiles["opendeck_default"] || !applicationProfiles["opendeck_default"][device.id]}
-								<option value="opendeck_default">Default profile</option>
-								{#if applications.filter((appName) => !applicationProfiles[appName] || !applicationProfiles[appName][device.id]).length > 0}
-									<option disabled>──────────</option>
-								{/if}
-							{/if}
-							{#each applications as appName}
-								{#if !applicationProfiles[appName] || !applicationProfiles[appName][device.id]}
-									<option value={appName}>{appName}</option>
-								{/if}
-							{/each}
-						</select>
-					</td>
-					<td class="w-96">
-						<select bind:value={applicationsAddProfile} class="select select-sm w-full">
-							<option selected disabled value="opendeck_select_profile">Select profile...</option>
-							<ProfileOptions {folders} />
-						</select>
-					</td>
-				</tr>
-			</tbody>
-		</table>
-	</div>
-</Popup>
+<ApplicationProfilesPopup show={showApplicationManager} {device} {folders} {applications} bind:applicationProfiles error={applicationProfilesError} onClose={() => (showApplicationManager = false)} />

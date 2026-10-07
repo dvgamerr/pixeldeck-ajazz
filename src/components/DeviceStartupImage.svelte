@@ -2,68 +2,36 @@
 	import type { DeviceInfo } from "$lib/DeviceInfo";
 
 	import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
-	import CaretDown from "phosphor-svelte/lib/CaretDown";
-	import CaretUp from "phosphor-svelte/lib/CaretUp";
-	import ImageSquare from "phosphor-svelte/lib/ImageSquare";
 	import Plus from "phosphor-svelte/lib/Plus";
 	import Stack from "phosphor-svelte/lib/Stack";
-	import Trash from "phosphor-svelte/lib/Trash";
+	import StartupImageLayerList from "./StartupImageLayerList.svelte";
+	import StartupImageMask from "./StartupImageMask.svelte";
 
 	import { pauseProfileRendering, resumeProfileRendering } from "$lib/profileRendering";
+	import {
+		AKP05_MASK,
+		MAX_LAYERS,
+		PREVIEW_PADDING,
+		PREVIEW_PANEL_HORIZONTAL_PADDING,
+		PREVIEW_PANEL_VERTICAL_PADDING,
+		RESIZE_HANDLES,
+		decodeImage,
+		drawComposedImage,
+		getFittedImageSize,
+		getTransformBounds,
+		makeLayerId,
+		partitionFiles,
+		readFile,
+		rotateVector,
+		type ImageLayer,
+		type PersistedLayer,
+		type StartupImageProject,
+	} from "$lib/startupImage";
 
 	import { invoke } from "@tauri-apps/api/core";
-	import DOMPurify from "dompurify";
 	import { onMount } from "svelte";
 
 	export let device: DeviceInfo;
-
-	type PersistedLayer = {
-		id: string;
-		name: string;
-		image: string;
-		zoom: number;
-		offset_x: number;
-		offset_y: number;
-		rotation: number;
-	};
-
-	type ImageLayer = PersistedLayer & {
-		decoded?: HTMLImageElement;
-	};
-
-	type StartupImageProject = {
-		layers: PersistedLayer[];
-	};
-
-	const MAX_FILE_SIZE = 10 * 1024 * 1024;
-	const MAX_LAYERS = 64;
-	const PREVIEW_PADDING = 16;
-	const PREVIEW_PANEL_HORIZONTAL_PADDING = 32;
-	const PREVIEW_PANEL_VERTICAL_PADDING = 32;
-	const ALLOWED_EXTENSIONS = new Set(["png", "jpg", "jpeg", "bmp", "svg"]);
-	const ALLOWED_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/bmp", "image/x-ms-bmp", "image/svg+xml"]);
-	// AKP05E_552A mask and startup image share one 810 × 470 coordinate space.
-	// The visible key apertures are 126 × 126 even though the device protocol also
-	// accepts larger per-surface payloads. The touch display is one continuous
-	// 810 × 130 strip; its four action zones are not separate physical screens.
-	const AKP05_MASK = {
-		width: 810,
-		height: 470,
-		keySize: 126,
-		keyX: [0, 170, 340, 510, 680],
-		keyY: [0, 170],
-		touchStrip: { x: 0, y: 340, width: 810, height: 130 },
-	};
-	const RESIZE_HANDLES = [
-		{ label: "Resize from top left", placement: "-top-1.5 -left-1.5 size-3.5 cursor-nwse-resize", x: -1, y: -1 },
-		{ label: "Resize from top right", placement: "-top-1.5 -right-1.5 size-3.5 cursor-nesw-resize", x: 1, y: -1 },
-		{ label: "Resize from bottom left", placement: "-bottom-1.5 -left-1.5 size-3.5 cursor-nesw-resize", x: -1, y: 1 },
-		{ label: "Resize from bottom right", placement: "-right-1.5 -bottom-1.5 size-3.5 cursor-nwse-resize", x: 1, y: 1 },
-		{ label: "Resize from top", placement: "-top-1 left-1/2 h-2 w-5 -translate-x-1/2 cursor-ns-resize", x: 0, y: -1 },
-		{ label: "Resize from bottom", placement: "-bottom-1 left-1/2 h-2 w-5 -translate-x-1/2 cursor-ns-resize", x: 0, y: 1 },
-		{ label: "Resize from left", placement: "top-1/2 -left-1 h-5 w-2 -translate-y-1/2 cursor-ew-resize", x: -1, y: 0 },
-		{ label: "Resize from right", placement: "top-1/2 -right-1 h-5 w-2 -translate-y-1/2 cursor-ew-resize", x: 1, y: 0 },
-	] as const;
 
 	let fileInput: HTMLInputElement;
 	let previewCanvas: HTMLCanvasElement;
@@ -174,77 +142,6 @@
 		}
 	}
 
-	function decodeImage(source: string) {
-		return new Promise<HTMLImageElement>((resolve, reject) => {
-			const image = new Image();
-			image.onload = () => resolve(image);
-			image.onerror = () => reject(new Error("The image could not be decoded"));
-			image.src = source;
-		});
-	}
-
-	function drawComposedImage(canvas: HTMLCanvasElement, imageLayers: ImageLayer[], output: { width: number; height: number }) {
-		if (!output.width || !output.height) return;
-		if (canvas.width != output.width) canvas.width = output.width;
-		if (canvas.height != output.height) canvas.height = output.height;
-
-		const context = canvas.getContext("2d");
-		if (!context) return;
-		context.fillStyle = "#000000";
-		context.fillRect(0, 0, canvas.width, canvas.height);
-		context.imageSmoothingEnabled = true;
-		context.imageSmoothingQuality = "high";
-
-		for (const layer of imageLayers) {
-			if (!layer.decoded) continue;
-			const fittedImage = getFittedImageSize(layer.decoded, output, layer.zoom);
-			context.save();
-			context.translate(canvas.width / 2 + layer.offset_x, canvas.height / 2 + layer.offset_y);
-			context.rotate((layer.rotation * Math.PI) / 180);
-			context.drawImage(layer.decoded, -fittedImage.width / 2, -fittedImage.height / 2, fittedImage.width, fittedImage.height);
-			context.restore();
-		}
-	}
-
-	function readFile(file: File, extension: string) {
-		return new Promise<string>((resolve, reject) => {
-			const reader = new FileReader();
-			reader.onload = () => {
-				if (typeof reader.result != "string") {
-					reject(new Error(`${file.name} could not be read`));
-					return;
-				}
-				if (extension == "svg") {
-					const sanitized = DOMPurify.sanitize(reader.result, {
-						USE_PROFILES: { svg: true, svgFilters: true },
-						FORBID_TAGS: ["script", "foreignObject", "iframe", "object", "embed"],
-					});
-					const document = new DOMParser().parseFromString(sanitized, "image/svg+xml");
-					if (document.querySelector("parsererror") || document.documentElement.localName != "svg") {
-						reject(new Error(`${file.name} is not a valid SVG image`));
-						return;
-					}
-					const bytes = new TextEncoder().encode(sanitized);
-					let binary = "";
-					for (let index = 0; index < bytes.length; index += 8192) {
-						binary += String.fromCharCode(...bytes.subarray(index, index + 8192));
-					}
-					resolve(`data:image/svg+xml;base64,${btoa(binary)}`);
-					return;
-				}
-				const mimeType = extension == "png" ? "image/png" : extension == "bmp" ? "image/bmp" : "image/jpeg";
-				resolve(reader.result.replace(/^data:[^;,]+;base64,/, `data:${mimeType};base64,`));
-			};
-			reader.onerror = () => reject(new Error(`${file.name} could not be read`));
-			if (extension == "svg") reader.readAsText(file);
-			else reader.readAsDataURL(file);
-		});
-	}
-
-	function makeLayerId() {
-		return globalThis.crypto?.randomUUID?.() ?? `layer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-	}
-
 	async function selectFiles(fileList: FileList | null) {
 		successMessage = "";
 		errorMessage = "";
@@ -255,18 +152,7 @@
 			return;
 		}
 
-		const validFiles: { file: File; extension: string }[] = [];
-		const rejected: string[] = [];
-		for (const file of files) {
-			const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
-			if (!ALLOWED_EXTENSIONS.has(extension) || (file.type && !ALLOWED_MIME_TYPES.has(file.type))) {
-				rejected.push(`${file.name} has an unsupported file type`);
-			} else if (file.size > MAX_FILE_SIZE) {
-				rejected.push(`${file.name} is larger than 10 MB`);
-			} else {
-				validFiles.push({ file, extension });
-			}
-		}
+		const { validFiles, rejected } = partitionFiles(files);
 
 		try {
 			const addedLayers = await Promise.all(
@@ -332,37 +218,6 @@
 		revision += 1;
 		successMessage = "";
 		errorMessage = "";
-	}
-
-	function getTransformBounds(layer: ImageLayer | undefined, outputWidth: number, outputHeight: number) {
-		if (!layer?.decoded || !outputWidth || !outputHeight) {
-			return { left: 0, top: 0, width: 0, height: 0 };
-		}
-		const fittedImage = getFittedImageSize(layer.decoded, { width: outputWidth, height: outputHeight }, layer.zoom);
-		return {
-			left: ((outputWidth - fittedImage.width) / 2 + layer.offset_x) / outputWidth,
-			top: ((outputHeight - fittedImage.height) / 2 + layer.offset_y) / outputHeight,
-			width: fittedImage.width / outputWidth,
-			height: fittedImage.height / outputHeight,
-		};
-	}
-
-	function getFittedImageSize(image: HTMLImageElement, output: { width: number; height: number }, scale: number) {
-		const fillScale = Math.max(output.width / image.naturalWidth, output.height / image.naturalHeight);
-		return {
-			width: image.naturalWidth * fillScale * scale,
-			height: image.naturalHeight * fillScale * scale,
-		};
-	}
-
-	function rotateVector(x: number, y: number, degrees: number) {
-		const radians = (degrees * Math.PI) / 180;
-		const cosine = Math.cos(radians);
-		const sine = Math.sin(radians);
-		return {
-			x: x * cosine - y * sine,
-			y: x * sine + y * cosine,
-		};
 	}
 
 	function pointerToOutput(event: PointerEvent) {
@@ -521,8 +376,16 @@
 
 <svelte:window on:pointermove={moveTransform} on:pointerup={endTransform} on:pointercancel={endTransform} />
 
-<div class="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-3">
-	<input bind:this={fileInput} type="file" class="hidden" accept=".png,.jpg,.jpeg,.bmp,.svg,image/png,image/jpeg,image/bmp,image/svg+xml" multiple on:change={() => selectFiles(fileInput.files)} />
+<div class="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-3" data-testid="startup-image-editor">
+	<input
+		bind:this={fileInput}
+		type="file"
+		data-testid="startup-file-input"
+		class="hidden"
+		accept=".png,.jpg,.jpeg,.bmp,.svg,image/png,image/jpeg,image/bmp,image/svg+xml"
+		multiple
+		on:change={() => selectFiles(fileInput.files)}
+	/>
 
 	<header class="flex shrink-0 flex-wrap items-start gap-2">
 		<div class="min-w-0">
@@ -544,12 +407,12 @@
 			{:else}
 				<span class="badge badge-outline">No images</span>
 			{/if}
-			<button type="button" class="btn btn-sm" disabled={loading || layers.length >= MAX_LAYERS} on:click={openFilePicker}>
+			<button type="button" class="btn btn-sm" data-testid="startup-add" disabled={loading || layers.length >= MAX_LAYERS} on:click={openFilePicker}>
 				<Plus size="16" weight="bold" />
 				Add
 			</button>
-			<button type="button" class="btn btn-ghost btn-sm" disabled={!activeLayer || applying} on:click={resetPlacement}>Reset selected</button>
-			<button type="button" class="btn btn-primary btn-sm min-w-32" disabled={!layers.length || loading || applying} on:click={applyImage}>
+			<button type="button" class="btn btn-ghost btn-sm" data-testid="startup-reset" disabled={!activeLayer || applying} on:click={resetPlacement}>Reset selected</button>
+			<button type="button" class="btn btn-primary btn-sm min-w-32" data-testid="startup-apply" disabled={!layers.length || loading || applying} on:click={applyImage}>
 				{#if applying}
 					<span class="loading loading-spinner loading-sm"></span>
 					Applying…
@@ -567,65 +430,7 @@
 	{/if}
 
 	<div class="grid min-h-0 min-w-0 flex-1 grid-cols-[15rem_minmax(0,1fr)] overflow-hidden rounded-box border border-base-300 bg-base-200">
-		<aside class="flex min-h-0 flex-col border-r border-base-300 bg-base-100/60">
-			<div class="flex shrink-0 items-center gap-2 border-b border-base-300 p-3">
-				<ImageSquare size="17" weight="bold" />
-				<h4 class="ui-label">Images</h4>
-				<span class="badge badge-sm ml-auto">{layers.length}</span>
-			</div>
-
-			{#if layers.length}
-				<div class="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
-					{#each [...layers].reverse() as layer (layer.id)}
-						{@const layerIndex = layers.findIndex((item) => item.id == layer.id)}
-						<div class={`group flex items-center gap-2 rounded-field border p-2 transition-colors ${activeLayerId == layer.id ? "border-primary bg-primary/10" : "border-base-300 bg-base-100"}`}>
-							<button type="button" class="flex min-w-0 flex-1 items-center gap-2 text-left" on:click={() => (activeLayerId = layer.id)}>
-								<span class="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-md border border-base-300 bg-black">
-									<img src={layer.image} alt="" class="max-h-full max-w-full object-contain" />
-								</span>
-								<span class="min-w-0">
-									<span class="ui-label block truncate">{layer.name}</span>
-									<span class="ui-caption ui-muted block">Layer {layerIndex + 1}</span>
-								</span>
-							</button>
-							<div class="flex shrink-0 flex-col">
-								<button
-									type="button"
-									class="btn btn-ghost btn-xs h-5 min-h-5 px-1"
-									aria-label={`Move ${layer.name} up`}
-									disabled={layerIndex == layers.length - 1}
-									on:click={() => moveLayer(layer.id, 1)}
-								>
-									<CaretUp size="13" weight="bold" />
-								</button>
-								<button type="button" class="btn btn-ghost btn-xs h-5 min-h-5 px-1" aria-label={`Move ${layer.name} down`} disabled={layerIndex == 0} on:click={() => moveLayer(layer.id, -1)}>
-									<CaretDown size="13" weight="bold" />
-								</button>
-							</div>
-							<button type="button" class="btn btn-circle btn-ghost btn-xs text-error" aria-label={`Remove ${layer.name}`} on:click={() => removeLayer(layer.id)}>
-								<Trash size="15" />
-							</button>
-						</div>
-					{/each}
-				</div>
-			{:else if loading}
-				<div class="flex flex-1 items-center justify-center p-4">
-					<span class="loading loading-spinner loading-md text-primary"></span>
-				</div>
-			{:else}
-				<div class="flex flex-1 flex-col items-center justify-center p-4 text-center">
-					<div class="mb-3 flex size-12 items-center justify-center rounded-full bg-base-200">
-						<ImageSquare size="24" class="text-base-content/45" />
-					</div>
-					<p class="ui-label">No images added</p>
-					<p class="ui-caption ui-muted mt-1">Add one or more PNG, JPG, JPEG, BMP, or SVG files.</p>
-					<button type="button" class="btn btn-primary btn-sm mt-4" on:click={openFilePicker}>
-						<Plus size="15" weight="bold" />
-						Add images
-					</button>
-				</div>
-			{/if}
-		</aside>
+		<StartupImageLayerList {layers} {activeLayerId} {loading} onSelect={(id) => (activeLayerId = id)} onMove={moveLayer} onRemove={removeLayer} onAdd={openFilePicker} />
 
 		<section bind:this={previewPanel} class="relative flex min-h-0 min-w-0 items-center justify-center overflow-hidden p-3">
 			<div class="relative shrink-0 overflow-visible rounded-lg bg-black shadow-lg" style={`width: ${previewDisplayWidth}px; aspect-ratio: ${previewFrameWidth} / ${previewFrameHeight};`}>
@@ -641,36 +446,10 @@
 					on:pointerup={endDrag}
 					on:pointercancel={endDrag}
 				>
-					<canvas bind:this={previewCanvas} class="absolute inset-0 h-full w-full rounded-lg"></canvas>
+					<canvas bind:this={previewCanvas} data-testid="startup-preview-canvas" class="absolute inset-0 h-full w-full rounded-lg"></canvas>
 
 					{#if showAkp05Mask}
-						<svg class="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${AKP05_MASK.width} ${AKP05_MASK.height}`} preserveAspectRatio="none" aria-hidden="true">
-							<defs>
-								<mask id="akp05-startup-layout-mask">
-									<rect width={AKP05_MASK.width} height={AKP05_MASK.height} fill="white" />
-									{#each AKP05_MASK.keyY as y}
-										{#each AKP05_MASK.keyX as x}
-											<rect {x} {y} width={AKP05_MASK.keySize} height={AKP05_MASK.keySize} rx="11" fill="black" />
-										{/each}
-									{/each}
-									<rect x={AKP05_MASK.touchStrip.x} y={AKP05_MASK.touchStrip.y} width={AKP05_MASK.touchStrip.width} height={AKP05_MASK.touchStrip.height} fill="black" />
-								</mask>
-							</defs>
-							<rect width={AKP05_MASK.width} height={AKP05_MASK.height} fill="rgba(0, 0, 0, 0.82)" mask="url(#akp05-startup-layout-mask)" />
-							<g fill="none" stroke="rgba(255, 255, 255, 0.38)" stroke-width="2">
-								{#each AKP05_MASK.keyY as y}
-									{#each AKP05_MASK.keyX as x}
-										<rect {x} {y} width={Math.min(AKP05_MASK.keySize, AKP05_MASK.width - x - 1)} height={AKP05_MASK.keySize} rx="11" />
-									{/each}
-								{/each}
-								<rect
-									x={AKP05_MASK.touchStrip.x}
-									y={AKP05_MASK.touchStrip.y}
-									width={Math.min(AKP05_MASK.touchStrip.width, AKP05_MASK.width - AKP05_MASK.touchStrip.x - 1)}
-									height={AKP05_MASK.touchStrip.height}
-								/>
-							</g>
-						</svg>
+						<StartupImageMask />
 					{/if}
 
 					{#if activeLayer?.decoded}

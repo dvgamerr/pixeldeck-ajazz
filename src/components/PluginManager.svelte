@@ -11,8 +11,11 @@
 	import ListedPlugin from "./ListedPlugin.svelte";
 	import PluginDetails from "./PluginDetails.svelte";
 	import Popup from "./Popup.svelte";
+	import PopupHeader from "./PopupHeader.svelte";
+	import ReleaseAssetChooser from "./ReleaseAssetChooser.svelte";
 	import Tooltip from "./Tooltip.svelte";
 
+	import { getFetch, isInstallableAsset, matchesQuery, releasesEndpoint, sortInstalledPlugins, type GitHubPlugin, type ReleaseAsset } from "$lib/plugins";
 	import { getWebserverUrl } from "$lib/ports";
 	import { localisations, settings } from "$lib/settings";
 	import { actionList, deviceSelector } from "$lib/singletons";
@@ -22,8 +25,7 @@
 	import { ask, message, open } from "@tauri-apps/plugin-dialog";
 	import { onMount } from "svelte";
 
-	// @ts-expect-error
-	const fetch = window.fetchNative ?? window.fetch;
+	const fetch = getFetch();
 
 	let showPopup: boolean;
 	onMount(() => {
@@ -80,36 +82,21 @@
 	}
 
 	let openDetailsView: string | null = null;
-	type GitHubPlugin = {
-		name: string;
-		author: string;
-		repository: string;
-		download_url: string | undefined;
-	};
 	async function installPluginGitHub(id: string, plugin: GitHubPlugin) {
 		if (plugin.download_url) {
 			await installPlugin(plugin.name, plugin.download_url, null, id);
 			return;
 		}
 
-		let endpoint = new URL(plugin.repository);
-		endpoint.hostname = "api." + endpoint.hostname;
-		endpoint.pathname = "/repos" + endpoint.pathname + "/releases";
-
 		let res;
 		try {
-			res = await (await fetch(endpoint)).json();
+			res = await (await fetch(releasesEndpoint(plugin.repository))).json();
 		} catch (error: any) {
 			message(error, { title: `Failed to install "${plugin.name}"` });
 			return;
 		}
 
-		let assets = [];
-		for (const asset of res[0].assets) {
-			if (asset.name.toLowerCase().endsWith(".streamdeckplugin") || asset.name.toLowerCase().endsWith(".zip")) {
-				assets.push(asset);
-			}
-		}
+		const assets: ReleaseAsset[] = res[0].assets.filter(isInstallableAsset);
 		let selected;
 		if (assets.length == 1) selected = assets[0];
 		else {
@@ -155,7 +142,7 @@
 	let query: string = "";
 </script>
 
-<button type="button" class="btn btn-ghost btn-sm" title="Manage plugins" on:click={() => (showPopup = true)}>
+<button type="button" class="btn btn-ghost btn-sm" data-testid="plugins-open" title="Manage plugins" on:click={() => (showPopup = true)}>
 	<PuzzlePiece size="16" weight="bold" />
 	<span>Plugins</span>
 </button>
@@ -170,21 +157,15 @@
 	}}
 />
 
-<Popup show={showPopup} fullscreen onClose={() => (showPopup = false)}>
-	<header class="flex items-center border-b border-base-300 pb-3">
-		<div>
-			<p class="ui-eyebrow">OpenDeck</p>
-			<h2 class="ui-page-title">Manage plugins</h2>
-		</div>
-		<button type="button" class="btn btn-circle btn-ghost ml-auto" aria-label="Close plugin manager" on:click={() => (showPopup = false)}>✕</button>
-	</header>
+<Popup show={showPopup} fullscreen onClose={() => (showPopup = false)} testid="plugin-manager">
+	<PopupHeader eyebrow="OpenDeck" title="Manage plugins" closeLabel="Close plugin manager" onClose={() => (showPopup = false)} testid="plugin-manager-header" />
 
 	<div class="ui-section-heading mt-4">
 		<h3 class="ui-title">Installed plugins</h3>
 		<span class="badge badge-neutral badge-sm">{installed.length}</span>
 	</div>
-	<div class="mt-2 grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
-		{#each installed.sort((a, b) => (a.builtin && !b.builtin ? -1 : b.builtin && !a.builtin ? 1 : a.id.localeCompare(b.id))) as plugin}
+	<div class="plugin-grid mt-2" data-testid="plugins-installed">
+		{#each sortInstalledPlugins(installed) as plugin}
 			<ListedPlugin
 				icon={getWebserverUrl(plugin.icon)}
 				name={$localisations && $localisations[plugin.id] && $localisations[plugin.id].Name ? $localisations[plugin.id].Name : plugin.name}
@@ -218,14 +199,14 @@
 
 	<div class="ui-section-heading mt-6 justify-between">
 		<h3 class="ui-title">Plugin store</h3>
-		<button type="button" class="btn btn-sm" on:click={installPluginFile}>
+		<button type="button" class="btn btn-sm" data-testid="plugins-install-file" on:click={installPluginFile}>
 			<FileArrowUp />
 			Install from file
 		</button>
 	</div>
 	<label class="input input-bordered mt-2 w-full bg-base-200">
 		<MagnifyingGlass size="16" class="opacity-60" />
-		<input bind:value={query} class="grow" placeholder="Search plugins" type="search" spellcheck="false" />
+		<input data-testid="plugins-search" bind:value={query} class="grow" placeholder="Search plugins" type="search" spellcheck="false" />
 	</label>
 
 	<div role="alert" class="alert mt-4">
@@ -244,13 +225,13 @@
 			<h3 class="ui-label">Open-source plugins</h3>
 			<Tooltip>Open-source plugins downloaded from the author's releases.</Tooltip>
 		</div>
-		<div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
+		<div class="plugin-grid" data-testid="plugins-store">
 			{#each Object.entries(plugins) as [id, plugin]}
 				<ListedPlugin
 					icon="https://openactionapi.github.io/plugins/icons/{id}.png"
 					name={plugin.name}
 					subtitle={plugin.author}
-					hidden={!plugin.name.toLowerCase().includes(query.toLowerCase())}
+					hidden={!matchesQuery(plugin.name, query)}
 					action={() => (openDetailsView = id)}
 				>
 					<ArrowSquareOut size="20" />
@@ -267,13 +248,13 @@
 			<Tooltip>Plugins archived from the Elgato App Store (now replaced by the Elgato Marketplace).</Tooltip>
 		</div>
 		{#await archiveRes.json() then entries}
-			<div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
+			<div class="plugin-grid" data-testid="plugins-archive">
 				{#each entries as plugin}
 					<ListedPlugin
 						icon="https://plugins.amankhanna.me/icons/{plugin.id}.png"
 						name={plugin.name}
 						subtitle={plugin.author}
-						hidden={!plugin.name.toLowerCase().includes(query.toLowerCase())}
+						hidden={!matchesQuery(plugin.name, query)}
 						action={() => installPluginElgato(plugin)}
 					>
 						<CloudArrowDown size="20" />
@@ -297,18 +278,5 @@
 {/if}
 
 {#if choices}
-	<div class="modal modal-open z-[300]">
-		<div class="modal-box w-96 border border-base-300">
-			<h3 class="ui-title">Choose a release asset</h3>
-			<select class="select select-bordered mt-3 w-full" bind:value={choice}>
-				{#each choices as choice, i}
-					<option value={i}>{choice.name}</option>
-				{/each}
-			</select>
-			<div class="modal-action">
-				<button type="button" class="btn" on:click={cancelChoice}>Cancel</button>
-				<button type="button" class="btn btn-primary" on:click={finishChoice}>Install</button>
-			</div>
-		</div>
-	</div>
+	<ReleaseAssetChooser {choices} bind:choice onCancel={cancelChoice} onInstall={() => finishChoice(null)} />
 {/if}

@@ -184,6 +184,27 @@ textarea {
 		gap: var(--ui-space-2);
 		margin-block: var(--ui-space-6) var(--ui-space-2);
 	}
+
+	/* Shared compositions used by Settings, Plugin manager and Profile manager. */
+	.settings-card {
+		@apply card min-w-0 border border-base-300 bg-base-200;
+	}
+
+	.settings-row {
+		@apply grid grid-cols-[1fr_auto] items-center gap-3;
+	}
+
+	.settings-row--tip {
+		@apply grid-cols-[1fr_auto_auto];
+	}
+
+	.plugin-grid {
+		@apply grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3;
+	}
+
+	.icon-btn-xs {
+		@apply btn btn-circle btn-ghost btn-xs;
+	}
 }
 
 /* Daisy defaults stay low-specificity so explicit h-*, min-h-*, p-* and gap-* utilities can still win. */

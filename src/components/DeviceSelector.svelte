@@ -124,7 +124,7 @@
 </script>
 
 {#if Object.keys(devices).length > 0}
-	<select bind:value class="select select-sm w-full" aria-label="Device">
+	<select bind:value data-testid="device-selector" class="select select-sm w-full" aria-label="Device">
 		<option value="" disabled selected>Choose a device...</option>
 
 		{#each Object.entries(devices).sort() as [id, device]}

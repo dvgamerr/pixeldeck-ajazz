@@ -4,6 +4,7 @@
 	import Popup from "./Popup.svelte";
 
 	import "$lib/shims.ts";
+	import { getFetch } from "$lib/plugins";
 
 	import { invoke } from "@tauri-apps/api/core";
 	import DOMPurify from "dompurify";
@@ -19,8 +20,7 @@
 	export let install: () => void;
 	export let close: () => void;
 
-	// @ts-expect-error
-	const fetch = window.fetchNative ?? window.fetch;
+	const fetch = getFetch();
 
 	async function getReadme(repo: string): Promise<string> {
 		const renderer = new marked.Renderer();
@@ -60,9 +60,9 @@
 	});
 </script>
 
-<Popup show fullscreen onClose={close}>
+<Popup show fullscreen onClose={close} testid="plugin-details">
 	<header class="flex justify-end">
-		<button type="button" class="btn btn-circle btn-ghost" aria-label="Close plugin details" on:click={close}>✕</button>
+		<button type="button" class="btn btn-circle btn-ghost" aria-label="Close plugin details" data-testid="plugin-details-close" on:click={close}>✕</button>
 	</header>
 	<section class="card card-side border border-base-300 bg-base-200">
 		<figure class="shrink-0 p-4">
@@ -89,7 +89,7 @@
 
 			<div class="card-actions mt-3 items-center">
 				<div class="join">
-					<button type="button" on:click={install} class="btn btn-primary join-item">Install</button>
+					<button type="button" data-testid="plugin-details-install" on:click={install} class="btn btn-primary join-item">Install</button>
 					<button
 						type="button"
 						on:click={() => invoke("open_url", { url: details.download_url ?? details.repository + "/releases/latest" })}
