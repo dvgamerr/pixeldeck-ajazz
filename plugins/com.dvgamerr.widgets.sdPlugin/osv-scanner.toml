@@ -1,0 +1,22 @@
+# Transitive advisories from Tauri's Linux GTK/urlpattern stack; not upgradable from this repo.
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0429"
+reason = "glib via gtk3 bindings (Tauri Linux); awaiting upstream"
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0370"
+reason = "proc-macro-error via gtk3 bindings (Tauri Linux)"
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0081"
+reason = "unic-* via urlpattern/tauri-utils"
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0075"
+reason = "unic-* via urlpattern/tauri-utils"
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0080"
+reason = "unic-* via urlpattern/tauri-utils"
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0100"
+reason = "unic-* via urlpattern/tauri-utils"
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0098"
+reason = "unic-* via urlpattern/tauri-utils"

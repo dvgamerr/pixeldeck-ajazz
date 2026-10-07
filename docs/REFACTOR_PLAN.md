@@ -20,21 +20,21 @@ Status legend: [ ] todo, [~] in progress, [x] done
 - [x] 2.4 ajazz-sdk (behaviour must not change, see CLAUDE.md)
 - [x] 2.5 plugins (starterpack, widgets)
 
-## Phase 3 - Clear qlty  [ ]
-- [ ] 3.1 smells -a -> 0
-- [ ] 3.2 metrics -a within thresholds
-- [ ] 3.3 check -a clean
-- [ ] 3.4 CI step
+## Phase 3 - Clear qlty  [x]
+- [x] 3.1 smells -a -> 0
+- [x] 3.2 metrics -a within thresholds
+- [x] 3.3 check -a clean
+- [x] 3.4 CI step
 
-## Phase 4 - Playwright  [ ]
-- [ ] 4.1 Install @playwright/test, config, webServer
-- [ ] 4.2 Tauri API mock
-- [ ] 4.3 Specs: layout, Key menu, drag-drop, DeviceSelector race, ProfileManager, PluginManager, Settings, PropertyInspector
-- [ ] 4.4 test:e2e script + CI
+## Phase 4 - Playwright  [x]
+- [x] 4.1 Install @playwright/test, config, webServer
+- [x] 4.2 Tauri API mock
+- [x] 4.3 Specs: layout, Key menu, drag-drop, DeviceSelector race, ProfileManager, PluginManager, Settings, PropertyInspector
+- [x] 4.4 test:e2e script + CI
 
-## Phase 5 - Wrap-up  [ ]
-- [ ] 5.1 Full validation
-- [ ] 5.2 Docs update, before/after summary
+## Phase 5 - Wrap-up  [x]
+- [x] 5.1 Full validation
+- [x] 5.2 Docs update, before/after summary
 
 ## Log
 - Baseline: frontend verify green (13 bun tests, svelte-check 0/0). ajazz-sdk 18 tests pass. clippy clean.
@@ -45,3 +45,7 @@ Status legend: [ ] todo, [~] in progress, [x] done
 - [x] 2.4/2.5 ajazz-sdk (input_state.rs split) and plugins (shared/svg_text.rs, audio/system_monitor submodules) done; sdk 18 tests, starterpack 21, widgets 6 pass. Remaining: curve_to (trait-fixed 6 params) -> handle in Phase 3.
 - [x] 2.1/2.2 frontend done and committed (rendererHelper options object, startupImage/profileFolders/plugins libs, KeyContextMenu etc., data-testid added). Known gap: PropertyInspectorView still mounted via {#if} in +page.svelte (CLAUDE.md says toggle visibility) -> fix after Playwright specs exist. Phase 4 agent started.
 - [x] 2.3 src-tauri/src refactor done (main/ajazz/watcher/plugins/store split), clippy clean, 19 tests. plugins/shared moved to repo-root shared/ because src-tauri/build.rs treats every dir under plugins/ as a plugin.
+- Phase 3 result: `qlty smells -a` = 0 findings. Config: smells.function_parameters threshold 7 (ttf_parser trait curve_to has 6), e2e/fixtures/tauriMock.ts excluded (in-page self-contained mock script), osv-scanner.toml next to each Cargo.lock ignoring Tauri-Linux transitive advisories, rustls bumped.
+- Phase 3 not fixed (infra, pre-existing): zizmor unpinned action/image refs and template-injection in release.yml, Dockerfile hadolint/radarlint findings, yamllint CRLF on working copy, qlty rustfmt "fmt" notes caused by CRLF working copies (cargo fmt --check passes on all 4 manifests), shellcheck CRLF (scripts/*.sh excluded; index is LF).
+- Phase 4 result: 96 Playwright tests (e2e/*.pw.ts) pass, twice-repeat stable. Run: `bun run test:e2e`. Fixed during this: context menu clamp width 128->144, property inspector now stays mounted (hidden class).
+- Phase 5: verify (format, check, lint, bun test 13, build), cargo clippy/test on 4 manifests, Playwright all green. Hardware acceptance (Registered Ajazz AKP05E_552A as sd-<serial>) NOT run - needs a physical device.

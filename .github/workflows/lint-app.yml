@@ -15,6 +15,10 @@ on:
       - "src/**"
       - "plugins/**"
       - "tests/**"
+      - "e2e/**"
+      - "shared/**"
+      - "playwright.config.ts"
+      - ".qlty/**"
     branches:
       - main
     types: ["opened", "synchronize", "reopened"]
@@ -36,6 +40,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Cache Bun
@@ -51,3 +56,39 @@ jobs:
 
       - name: Lint app
         run: ./scripts/lint-app.sh
+
+  e2e:
+    name: Playwright e2e
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright browser
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        run: bun run test:e2e
+
+  qlty:
+    name: Qlty smells
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install qlty
+        uses: qltysh/qlty-action/install@v2
+
+      - name: Check smells
+        run: qlty smells -a --no-snippets

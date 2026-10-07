@@ -68,10 +68,14 @@ describe("DeviceFrameCoordinator", () => {
 		const batches = [];
 		let releaseFirstBatch;
 		const firstBatchBlocked = new Promise((resolve) => (releaseFirstBatch = resolve));
-		const coordinator = new DeviceFrameCoordinator(async (frames) => {
-			batches.push(frames);
-			if (batches.length === 1) await firstBatchBlocked;
-		}, 10_000, 10_000);
+		const coordinator = new DeviceFrameCoordinator(
+			async (frames) => {
+				batches.push(frames);
+				if (batches.length === 1) await firstBatchBlocked;
+			},
+			10_000,
+			10_000,
+		);
 		coordinator.beginInitialRender("device-a", "Profile A", 1);
 		coordinator.queue({ context: context("Profile A", 0), image: "initial" });
 
