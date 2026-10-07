@@ -70,13 +70,32 @@ fn find_available_port_base(mut base: u16) -> u16 {
 
 pub static PORT_BASE: Lazy<u16> = Lazy::new(|| find_available_port_base(57116));
 
-/// Initialise a plugin from a given directory.
-pub async fn initialise_plugin(path: &path::Path) -> anyhow::Result<()> {
-	let plugin_uuid = path.file_name().unwrap().to_str().unwrap();
+#[cfg(target_os = "windows")]
+const PLATFORM: &str = "windows";
+#[cfg(target_os = "macos")]
+const PLATFORM: &str = "mac";
+#[cfg(target_os = "linux")]
+const PLATFORM: &str = "linux";
 
-	let mut manifest = manifest::read_manifest(path)?;
+/// Maps fonts that are unavailable on every platform to bundled equivalents.
+fn substitute_font_family(family: &str) -> Option<&'static str> {
+	match family.to_lowercase().trim() {
+		"arial" => Some("Liberation Sans"),
+		"arial black" => Some("Archivo Black"),
+		"comic sans ms" => Some("Comic Neue"),
+		"courier" | "Courier New" => Some("Courier Prime"),
+		"georgia" => Some("Tinos"),
+		"impact" => Some("Anton"),
+		"microsoft sans serif" | "Times New Roman" => Some("Liberation Serif"),
+		"tahoma" | "Verdana" => Some("Open Sans"),
+		"trebuchet ms" => Some("Fira Sans"),
+		_ => None,
+	}
+}
 
-	if let Some(icon) = manifest.category_icon {
+/// Resolves icon, property inspector and font paths of the manifest's actions relative to the plugin directory.
+fn localise_manifest(manifest: &mut manifest::PluginManifest, path: &path::Path, plugin_uuid: &str) {
+	if let Some(icon) = manifest.category_icon.take() {
 		let category_icon_path = path.join(icon);
 		manifest.category_icon = Some(convert_icon(category_icon_path.to_string_lossy().to_string()));
 	}
@@ -101,79 +120,53 @@ pub async fn initialise_plugin(path: &path::Path) -> anyhow::Result<()> {
 				state.image = convert_icon(state_icon.to_str().unwrap().to_owned());
 			}
 
-			match state.family.clone().to_lowercase().trim() {
-				"arial" => "Liberation Sans",
-				"arial black" => "Archivo Black",
-				"comic sans ms" => "Comic Neue",
-				"courier" | "Courier New" => "Courier Prime",
-				"georgia" => "Tinos",
-				"impact" => "Anton",
-				"microsoft sans serif" | "Times New Roman" => "Liberation Serif",
-				"tahoma" | "Verdana" => "Open Sans",
-				"trebuchet ms" => "Fira Sans",
-				_ => continue,
-			}
-			.clone_into(&mut state.family);
-		}
-	}
-
-	{
-		let mut categories = CATEGORIES.write().await;
-		if let Some(category) = categories.get_mut(&manifest.category) {
-			for action in manifest.actions {
-				if let Some(index) = category.actions.iter().position(|v| v.uuid == action.uuid) {
-					category.actions.remove(index);
-				}
-				category.actions.push(action);
-			}
-		} else {
-			let mut category: Category = Category {
-				icon: manifest.category_icon,
-				actions: vec![],
-			};
-			for action in manifest.actions {
-				category.actions.push(action);
-			}
-			if !category.actions.is_empty() {
-				categories.insert(manifest.category, category);
+			if let Some(family) = substitute_font_family(&state.family) {
+				family.clone_into(&mut state.family);
 			}
 		}
 	}
+}
 
-	if let Some(namespace) = manifest.device_namespace {
-		DEVICE_NAMESPACES.write().await.insert(namespace, plugin_uuid.to_owned());
+async fn register_actions(category_name: String, category_icon: Option<String>, actions: Vec<crate::shared::Action>) {
+	let mut categories = CATEGORIES.write().await;
+	if let Some(category) = categories.get_mut(&category_name) {
+		for action in actions {
+			if let Some(index) = category.actions.iter().position(|v| v.uuid == action.uuid) {
+				category.actions.remove(index);
+			}
+			category.actions.push(action);
+		}
+		return;
 	}
 
+	if !actions.is_empty() {
+		categories.insert(category_name, Category { icon: category_icon, actions });
+	}
+}
+
+fn platform_code_path(manifest: &manifest::PluginManifest) -> Option<String> {
 	#[cfg(target_os = "windows")]
-	let platform = "windows";
+	let specific = manifest.code_path_windows.clone();
 	#[cfg(target_os = "macos")]
-	let platform = "mac";
+	let specific = manifest.code_path_macos.clone();
 	#[cfg(target_os = "linux")]
-	let platform = "linux";
+	let specific = manifest.code_path_linux.clone();
 
-	let mut code_path = manifest.code_path;
+	let code_path = specific.or_else(|| manifest.code_path.clone());
+	manifest.code_paths.as_ref().and_then(|p| p.get(TARGET).cloned()).or(code_path)
+}
+
+/// Determines the executable of a plugin and whether it has to run through Wine,
+/// based on its supported operating systems and the current operating system.
+fn select_code_path(manifest: &manifest::PluginManifest) -> anyhow::Result<(String, bool)> {
+	let mut code_path = manifest.code_path.clone();
 	let mut use_wine = false;
 	let mut supported = false;
 
-	// Determine the method used to run the plugin based on its supported operating systems and the current operating system.
-	for os in manifest.os {
-		if os.platform == platform {
-			#[cfg(target_os = "windows")]
-			if manifest.code_path_windows.is_some() {
-				code_path = manifest.code_path_windows.clone();
-			}
-			#[cfg(target_os = "macos")]
-			if manifest.code_path_macos.is_some() {
-				code_path = manifest.code_path_macos;
-			}
-			#[cfg(target_os = "linux")]
-			if manifest.code_path_linux.is_some() {
-				code_path = manifest.code_path_linux;
-			}
-			code_path = manifest.code_paths.and_then(|p| p.get(TARGET).cloned()).or(code_path);
-
+	for os in &manifest.os {
+		if os.platform == PLATFORM {
+			code_path = platform_code_path(manifest);
 			use_wine = false;
-
 			supported = true;
 			break;
 		} else if os.platform == "windows" {
@@ -183,163 +176,155 @@ pub async fn initialise_plugin(path: &path::Path) -> anyhow::Result<()> {
 	}
 
 	if code_path.is_none() && use_wine {
-		code_path = manifest.code_path_windows;
+		code_path.clone_from(&manifest.code_path_windows);
 	}
 
-	if !supported || code_path.is_none() {
-		return Err(anyhow!("unsupported on platform {}", platform));
+	match code_path {
+		Some(code_path) if supported => Ok((code_path, use_wine)),
+		_ => Err(anyhow!("unsupported on platform {}", PLATFORM)),
+	}
+}
+
+/// Spawns a plugin process with its output redirected to the plugin's log file.
+fn spawn_plugin_process(command: &mut Command, plugin_uuid: &str, args: &[&str], info: &impl serde::Serialize) -> anyhow::Result<Child> {
+	let log_file = fs::File::create(log_dir().join("plugins").join(format!("{plugin_uuid}.log")))?;
+	command
+		.args(args)
+		.arg(serde_json::to_string(info)?)
+		.stdout(Stdio::from(log_file.try_clone()?))
+		.stderr(Stdio::from(log_file));
+
+	#[cfg(target_os = "windows")]
+	{
+		use std::os::windows::process::CommandExt;
+		command.creation_flags(0x08000000);
 	}
 
-	let code_path = code_path.unwrap();
+	Ok(command.spawn()?)
+}
+
+async fn launch_webview_plugin(path: &path::Path, plugin_uuid: &str, code_path: &str, version: String) -> anyhow::Result<()> {
+	let url = format!("http://{}:{}/", LOOPBACK_HOST, *PORT_BASE + 2) + path.join(code_path).to_str().unwrap();
+	let info = info_param::make_info(plugin_uuid.to_owned(), version, false).await;
+	let initialization_script = webview_plugin_initialization_script(*PORT_BASE, plugin_uuid, &serde_json::to_string(&info)?);
+	let plugin_uuid_for_log = plugin_uuid.to_owned();
+	let window = tauri::WebviewWindowBuilder::new(APP_HANDLE.get().unwrap(), plugin_uuid.replace('.', "_"), tauri::WebviewUrl::External(url.parse()?))
+		.title(plugin_uuid)
+		.visible(false)
+		.on_page_load(move |window, payload| {
+			if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
+				&& let Err(error) = window.eval(initialization_script.clone())
+			{
+				log::error!("Failed to initialise webview plugin {plugin_uuid_for_log}: {error}");
+			}
+		})
+		.build()?;
+
+	if let Ok(store) = get_settings()
+		&& store.value.developer
+	{
+		let _ = window.show();
+		window.open_devtools();
+	}
+
+	INSTANCES.lock().await.insert(plugin_uuid.to_owned(), PluginInstance::Webview);
+	Ok(())
+}
+
+async fn launch_node_plugin(path: &path::Path, plugin_uuid: &str, code_path: String, version: String, args: &[&str]) -> anyhow::Result<()> {
+	// Check for Node.js installation and version in one go.
+	let command = if is_flatpak() { "flatpak-spawn" } else { "node" };
+	let extra_args = if is_flatpak() { vec!["--host", "node"] } else { vec![] };
+	let version_output = Command::new(command).args(&extra_args).arg("--version").output();
+	if version_output.is_err() || String::from_utf8(version_output.unwrap().stdout).unwrap().trim() < "v20.0.0" {
+		return Err(anyhow!("Node.js version 20.0.0 or higher is required"));
+	}
+
+	let info = info_param::make_info(plugin_uuid.to_owned(), version, true).await;
+	let mut command = Command::new(command);
+	command.current_dir(path).args(extra_args).arg(code_path);
+	let child = spawn_plugin_process(&mut command, plugin_uuid, args, &info)?;
+
+	INSTANCES.lock().await.insert(plugin_uuid.to_owned(), PluginInstance::Node(child));
+	Ok(())
+}
+
+async fn launch_wine_plugin(path: &path::Path, plugin_uuid: &str, code_path: String, version: String, args: &[&str]) -> anyhow::Result<()> {
+	let command = if is_flatpak() { "flatpak-spawn" } else { "wine" };
+	let extra_args = if is_flatpak() { vec!["--host", "wine"] } else { vec![] };
+	let result = Command::new(command)
+		.args(&extra_args)
+		.arg("--version")
+		.stdout(Stdio::null())
+		.stderr(Stdio::null())
+		.spawn()
+		.and_then(|mut child| child.wait())
+		.map(|status| status.success());
+	if !matches!(result, Ok(true)) {
+		return Err(anyhow!("failed to detect an installation of Wine"));
+	}
+
+	let info = info_param::make_info(plugin_uuid.to_owned(), version, true).await;
+	let mut command = Command::new(command);
+	command.current_dir(path).args(extra_args).arg(code_path);
+	if get_settings()?.value.separatewine {
+		command.env("WINEPREFIX", path.join("wineprefix").to_string_lossy().to_string());
+	} else {
+		let _ = fs::remove_dir_all(path.join("wineprefix"));
+	}
+	let child = spawn_plugin_process(&mut command, plugin_uuid, args, &info)?;
+
+	INSTANCES.lock().await.insert(plugin_uuid.to_owned(), PluginInstance::Wine(child));
+	Ok(())
+}
+
+async fn launch_native_plugin(path: &path::Path, plugin_uuid: &str, code_path: String, version: String, args: &[&str]) -> anyhow::Result<()> {
+	let info = info_param::make_info(plugin_uuid.to_owned(), version, false).await;
+
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::PermissionsExt;
+		fs::set_permissions(path.join(&code_path), fs::Permissions::from_mode(0o755))?;
+	}
+
+	let mut command = Command::new(path.join(code_path));
+	command.current_dir(path);
+	let child = spawn_plugin_process(&mut command, plugin_uuid, args, &info)?;
+
+	INSTANCES.lock().await.insert(plugin_uuid.to_owned(), PluginInstance::Native(child));
+	Ok(())
+}
+
+/// Initialise a plugin from a given directory.
+pub async fn initialise_plugin(path: &path::Path) -> anyhow::Result<()> {
+	let plugin_uuid = path.file_name().unwrap().to_str().unwrap();
+
+	let mut manifest = manifest::read_manifest(path)?;
+	localise_manifest(&mut manifest, path, plugin_uuid);
+
+	register_actions(manifest.category.clone(), manifest.category_icon.clone(), std::mem::take(&mut manifest.actions)).await;
+
+	if let Some(namespace) = manifest.device_namespace.take() {
+		DEVICE_NAMESPACES.write().await.insert(namespace, plugin_uuid.to_owned());
+	}
+
+	let (code_path, use_wine) = select_code_path(&manifest)?;
+	let version = manifest.version.clone();
 	let port_string = PORT_BASE.to_string();
 	let args = ["-port", port_string.as_str(), "-pluginUUID", plugin_uuid, "-registerEvent", "registerPlugin", "-info"];
 
 	let code_path_lowercase = code_path.to_ascii_lowercase();
 	if [".html", ".htm", ".xhtml"].iter().any(|extension| code_path_lowercase.ends_with(extension)) {
-		let url = format!("http://{}:{}/", LOOPBACK_HOST, *PORT_BASE + 2) + path.join(&code_path).to_str().unwrap();
-		let info = info_param::make_info(plugin_uuid.to_owned(), manifest.version, false).await;
-		let initialization_script = webview_plugin_initialization_script(*PORT_BASE, plugin_uuid, &serde_json::to_string(&info)?);
-		let plugin_uuid_for_log = plugin_uuid.to_owned();
-		let window = tauri::WebviewWindowBuilder::new(APP_HANDLE.get().unwrap(), plugin_uuid.replace('.', "_"), tauri::WebviewUrl::External(url.parse()?))
-			.title(plugin_uuid)
-			.visible(false)
-			.on_page_load(move |window, payload| {
-				if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
-					&& let Err(error) = window.eval(initialization_script.clone())
-				{
-					log::error!("Failed to initialise webview plugin {plugin_uuid_for_log}: {error}");
-				}
-			})
-			.build()?;
-
-		if let Ok(store) = get_settings()
-			&& store.value.developer
-		{
-			let _ = window.show();
-			window.open_devtools();
-		}
-
-		INSTANCES.lock().await.insert(plugin_uuid.to_owned(), PluginInstance::Webview);
-	} else if code_path.to_lowercase().ends_with(".js") || code_path.to_lowercase().ends_with(".mjs") || code_path.to_lowercase().ends_with(".cjs") {
-		// Check for Node.js installation and version in one go.
-		let command = if is_flatpak() { "flatpak-spawn" } else { "node" };
-		let extra_args = if is_flatpak() { vec!["--host", "node"] } else { vec![] };
-		let version_output = Command::new(command).args(&extra_args).arg("--version").output();
-		if version_output.is_err() || String::from_utf8(version_output.unwrap().stdout).unwrap().trim() < "v20.0.0" {
-			return Err(anyhow!("Node.js version 20.0.0 or higher is required"));
-		}
-
-		let info = info_param::make_info(plugin_uuid.to_owned(), manifest.version, true).await;
-		let log_file = fs::File::create(log_dir().join("plugins").join(format!("{plugin_uuid}.log")))?;
-
-		#[cfg(target_os = "windows")]
-		{
-			use std::os::windows::process::CommandExt;
-			let child = Command::new(command)
-				.current_dir(path)
-				.args(extra_args)
-				.arg(code_path)
-				.args(args)
-				.arg(serde_json::to_string(&info)?)
-				.stdout(Stdio::from(log_file.try_clone()?))
-				.stderr(Stdio::from(log_file))
-				.creation_flags(0x08000000)
-				.spawn()?;
-
-			INSTANCES.lock().await.insert(plugin_uuid.to_owned(), PluginInstance::Node(child));
-		}
-
-		#[cfg(not(target_os = "windows"))]
-		{
-			let child = Command::new(command)
-				.current_dir(path)
-				.args(extra_args)
-				.arg(code_path)
-				.args(args)
-				.arg(serde_json::to_string(&info)?)
-				.stdout(Stdio::from(log_file.try_clone()?))
-				.stderr(Stdio::from(log_file))
-				.spawn()?;
-
-			INSTANCES.lock().await.insert(plugin_uuid.to_owned(), PluginInstance::Node(child));
-		}
+		launch_webview_plugin(path, plugin_uuid, &code_path, version).await?;
+	} else if [".js", ".mjs", ".cjs"].iter().any(|extension| code_path_lowercase.ends_with(extension)) {
+		launch_node_plugin(path, plugin_uuid, code_path, version, &args).await?;
 	} else if use_wine {
-		let command = if is_flatpak() { "flatpak-spawn" } else { "wine" };
-		let extra_args = if is_flatpak() { vec!["--host", "wine"] } else { vec![] };
-		let result = Command::new(command)
-			.args(&extra_args)
-			.arg("--version")
-			.stdout(Stdio::null())
-			.stderr(Stdio::null())
-			.spawn()
-			.and_then(|mut child| child.wait())
-			.map(|status| status.success());
-		if !matches!(result, Ok(true)) {
-			return Err(anyhow!("failed to detect an installation of Wine"));
-		}
-
-		let info = info_param::make_info(plugin_uuid.to_owned(), manifest.version, true).await;
-		let log_file = fs::File::create(log_dir().join("plugins").join(format!("{plugin_uuid}.log")))?;
-
-		let mut command = Command::new(command);
-		command
-			.current_dir(path)
-			.args(extra_args)
-			.arg(code_path)
-			.args(args)
-			.arg(serde_json::to_string(&info)?)
-			.stdout(Stdio::from(log_file.try_clone()?))
-			.stderr(Stdio::from(log_file));
-		if get_settings()?.value.separatewine {
-			command.env("WINEPREFIX", path.join("wineprefix").to_string_lossy().to_string());
-		} else {
-			let _ = fs::remove_dir_all(path.join("wineprefix"));
-		}
-		let child = command.spawn()?;
-
-		INSTANCES.lock().await.insert(plugin_uuid.to_owned(), PluginInstance::Wine(child));
+		launch_wine_plugin(path, plugin_uuid, code_path, version, &args).await?;
 	} else {
-		let info = info_param::make_info(plugin_uuid.to_owned(), manifest.version, false).await;
-		let log_file = fs::File::create(log_dir().join("plugins").join(format!("{plugin_uuid}.log")))?;
-
-		#[cfg(target_os = "windows")]
-		{
-			use std::os::windows::process::CommandExt;
-			let child = Command::new(path.join(code_path))
-				.current_dir(path)
-				.args(args)
-				.arg(serde_json::to_string(&info)?)
-				.stdout(Stdio::from(log_file.try_clone()?))
-				.stderr(Stdio::from(log_file))
-				.creation_flags(0x08000000)
-				.spawn()?;
-
-			INSTANCES.lock().await.insert(plugin_uuid.to_owned(), PluginInstance::Native(child));
-		}
-
-		#[cfg(unix)]
-		{
-			use std::os::unix::fs::PermissionsExt;
-			fs::set_permissions(path.join(&code_path), fs::Permissions::from_mode(0o755))?;
-		}
-
-		#[cfg(not(target_os = "windows"))]
-		{
-			let child = Command::new(path.join(code_path))
-				.current_dir(path)
-				.args(args)
-				.arg(serde_json::to_string(&info)?)
-				.stdout(Stdio::from(log_file.try_clone()?))
-				.stderr(Stdio::from(log_file))
-				.spawn()?;
-
-			INSTANCES.lock().await.insert(plugin_uuid.to_owned(), PluginInstance::Native(child));
-		}
+		launch_native_plugin(path, plugin_uuid, code_path, version, &args).await?;
 	}
 
-	if let Some(applications) = manifest.applications_to_monitor
-		&& let Some(applications) = applications.get(platform)
-	{
+	if let Some(applications) = manifest.applications_to_monitor.as_ref().and_then(|applications| applications.get(PLATFORM)) {
 		crate::application_watcher::start_monitoring(plugin_uuid, applications).await;
 	}
 
@@ -415,6 +400,84 @@ pub async fn deactivate_plugins() {
 	}
 }
 
+fn read_manifest_version(plugin_dir: &path::Path) -> Result<semver::Version, anyhow::Error> {
+	let manifest = serde_json::from_slice::<manifest::PluginManifest>(&fs::read(plugin_dir.join("manifest.json"))?)?;
+	Ok(semver::Version::parse(&manifest.version)?)
+}
+
+fn builtin_plugin_needs_sync(existing_path: &path::Path, builtin_version: &semver::Version) -> bool {
+	read_manifest_version(existing_path)
+		.map(|existing_version| should_sync_builtin_plugin(&existing_version, builtin_version, cfg!(debug_assertions)))
+		.unwrap_or(true)
+}
+
+/// Replaces an installed plugin with the bundled copy, restoring the previous one if copying fails.
+fn replace_installed_plugin(builtin_path: &path::Path, existing_path: &path::Path) -> Result<(), anyhow::Error> {
+	let old_path = existing_path.with_extension("old");
+	if existing_path.exists() {
+		fs::rename(existing_path, &old_path)?;
+	}
+	if crate::shared::copy_dir(builtin_path, existing_path).is_err() && old_path.exists() {
+		fs::rename(&old_path, existing_path)?;
+	}
+	let _ = fs::remove_dir_all(&old_path);
+	Ok(())
+}
+
+fn sync_builtin_plugin(entry: &fs::DirEntry, plugin_dir: &path::Path) -> Result<(), anyhow::Error> {
+	let builtin_version = read_manifest_version(&entry.path())?;
+	let existing_path = plugin_dir.join(entry.file_name());
+	if builtin_plugin_needs_sync(&existing_path, &builtin_version) {
+		replace_installed_plugin(&entry.path(), &existing_path)?;
+	}
+	Ok(())
+}
+
+/// Copies bundled plugins into the plugins directory when they are missing or outdated.
+fn sync_builtin_plugins(plugin_dir: &path::Path) {
+	let Ok(Ok(entries)) = APP_HANDLE.get().unwrap().path().resolve("plugins", tauri::path::BaseDirectory::Resource).map(fs::read_dir) else {
+		return;
+	};
+	for entry in entries.flatten() {
+		if let Err(error) = sync_builtin_plugin(&entry, plugin_dir) {
+			error!("Failed to upgrade builtin plugin {}: {}", entry.file_name().to_string_lossy(), error);
+		}
+	}
+}
+
+/// Initialises every plugin directory found in the plugins folder.
+fn spawn_installed_plugins(plugin_dir: &path::Path) {
+	let entries = match fs::read_dir(plugin_dir) {
+		Ok(p) => p,
+		Err(error) => {
+			error!("Failed to read plugins directory at {}: {}", plugin_dir.display(), error);
+			panic!()
+		}
+	};
+
+	for entry in entries {
+		let entry = match entry {
+			Ok(entry) => entry,
+			Err(error) => {
+				warn!("Failed to read entry of plugins directory: {}", error);
+				continue;
+			}
+		};
+		let path = match entry.metadata().unwrap().is_symlink() {
+			true => fs::read_link(entry.path()).unwrap(),
+			false => entry.path(),
+		};
+		if !fs::metadata(&path).unwrap().is_dir() {
+			continue;
+		}
+		tokio::spawn(async move {
+			if let Err(error) = initialise_plugin(&path).await {
+				warn!("Failed to initialise plugin at {}: {:#}", path.display(), error);
+			}
+		});
+	}
+}
+
 /// Initialise plugins from the plugins directory.
 pub fn initialise_plugins() {
 	tokio::spawn(init_websocket_server());
@@ -424,63 +487,8 @@ pub fn initialise_plugins() {
 	let _ = fs::create_dir_all(&plugin_dir);
 	let _ = fs::create_dir_all(log_dir().join("plugins"));
 
-	if let Ok(Ok(entries)) = APP_HANDLE.get().unwrap().path().resolve("plugins", tauri::path::BaseDirectory::Resource).map(fs::read_dir) {
-		for entry in entries.flatten() {
-			if let Err(error) = (|| -> Result<(), anyhow::Error> {
-				let builtin_version = semver::Version::parse(&serde_json::from_slice::<manifest::PluginManifest>(&fs::read(entry.path().join("manifest.json"))?)?.version)?;
-				let existing_path = plugin_dir.join(entry.file_name());
-				if (|| -> Result<(), anyhow::Error> {
-					let existing_version = semver::Version::parse(&serde_json::from_slice::<manifest::PluginManifest>(&fs::read(existing_path.join("manifest.json"))?)?.version)?;
-					if should_sync_builtin_plugin(&existing_version, &builtin_version, cfg!(debug_assertions)) {
-						Err(anyhow::anyhow!("builtin plugin should replace existing plugin"))
-					} else {
-						Ok(())
-					}
-				})()
-				.is_err()
-				{
-					if existing_path.exists() {
-						fs::rename(&existing_path, existing_path.with_extension("old"))?;
-					}
-					if crate::shared::copy_dir(entry.path(), &existing_path).is_err() && existing_path.with_extension("old").exists() {
-						fs::rename(existing_path.with_extension("old"), &existing_path)?;
-					}
-					let _ = fs::remove_dir_all(existing_path.with_extension("old"));
-				}
-				Ok(())
-			})() {
-				error!("Failed to upgrade builtin plugin {}: {}", entry.file_name().to_string_lossy(), error);
-			}
-		}
-	}
-
-	let entries = match fs::read_dir(&plugin_dir) {
-		Ok(p) => p,
-		Err(error) => {
-			error!("Failed to read plugins directory at {}: {}", plugin_dir.display(), error);
-			panic!()
-		}
-	};
-
-	// Iterate through all directory entries in the plugins folder and initialise them as plugins if appropriate
-	for entry in entries {
-		if let Ok(entry) = entry {
-			let path = match entry.metadata().unwrap().is_symlink() {
-				true => fs::read_link(entry.path()).unwrap(),
-				false => entry.path(),
-			};
-			let metadata = fs::metadata(&path).unwrap();
-			if metadata.is_dir() {
-				tokio::spawn(async move {
-					if let Err(error) = initialise_plugin(&path).await {
-						warn!("Failed to initialise plugin at {}: {:#}", path.display(), error);
-					}
-				});
-			}
-		} else if let Err(error) = entry {
-			warn!("Failed to read entry of plugins directory: {}", error)
-		}
-	}
+	sync_builtin_plugins(&plugin_dir);
+	spawn_installed_plugins(&plugin_dir);
 }
 
 /// Start the WebSocket server that plugins communicate with.

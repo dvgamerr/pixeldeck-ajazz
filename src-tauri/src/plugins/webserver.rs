@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use tiny_http::{Header, Response, Server};
+use tiny_http::{Header, Request, Response, Server};
 
 const PROPERTY_INSPECTOR_DAISYUI: &str = include_str!(concat!(env!("OUT_DIR"), "/property_inspector_daisyui.css"));
 const PROPERTY_INSPECTOR_DAISYUI_PATH: &str = "/__opendeck/daisyui.css";
@@ -31,82 +31,7 @@ fn mime(extension: &str) -> String {
 	}
 }
 
-/// Start a simple webserver to serve files of plugins that run in a browser environment.
-pub async fn init_webserver(prefix: PathBuf) {
-	let server = {
-		let listener = std::net::TcpListener::bind((super::LOOPBACK_HOST, *super::PORT_BASE + 2)).unwrap();
-
-		#[cfg(windows)]
-		{
-			use std::os::windows::io::AsRawSocket;
-			use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
-
-			unsafe { SetHandleInformation(listener.as_raw_socket() as _, HANDLE_FLAG_INHERIT, 0) };
-		}
-
-		Server::from_listener(listener, None).unwrap()
-	};
-
-	for request in server.incoming_requests() {
-		let mut url = urlencoding::decode(request.url()).unwrap().into_owned();
-		if url.contains('?') {
-			url = url.split_once('?').unwrap().0.to_owned();
-		}
-		if url == PROPERTY_INSPECTOR_DAISYUI_PATH {
-			let mut response = Response::from_string(PROPERTY_INSPECTOR_DAISYUI);
-			response.add_header(Header {
-				field: "Content-Type".parse().unwrap(),
-				value: "text/css; charset=utf-8".parse().unwrap(),
-			});
-			response.add_header(Header {
-				field: "Cache-Control".parse().unwrap(),
-				value: "public, max-age=31536000, immutable".parse().unwrap(),
-			});
-			response.add_header(Header {
-				field: "Access-Control-Allow-Origin".parse().unwrap(),
-				value: "*".parse().unwrap(),
-			});
-			let _ = request.respond(response);
-			continue;
-		}
-		#[cfg(target_os = "windows")]
-		let url = url[1..].replace('/', "\\");
-
-		// Ensure the requested path is within the config directory to prevent unrestricted access to the filesystem.
-		let developer = match crate::store::Store::new("settings", &prefix, crate::store::Settings::default()) {
-			Ok(store) => store.value.developer,
-			Err(_) => false,
-		};
-		if !developer && !Path::new(&url).starts_with(&prefix) {
-			let _ = request.respond(Response::empty(403));
-			continue;
-		}
-
-		let access_control_allow_origin = Header {
-			field: "Access-Control-Allow-Origin".parse().unwrap(),
-			value: "*".parse().unwrap(),
-		};
-
-		// The Svelte frontend cannot call the connectElgatoStreamDeckSocket function on property inspector frames
-		// because they are served from a different origin (this plugin asset webserver).
-		// Instead, we have to inject a script onto all property inspector frames that receives a message
-		// from the Svelte frontend over window.postMessage.
-
-		// Additionally, Tauri cannot support window.open as seperate Tauri windows have seperate JavaScript contexts.
-		// However, plugin property inspectors expect access to this function.
-		// Instead, we have to inject a replacement window.open implementation that creates an IFrame element
-		// and requests the Svelte frontend to maximise the property inspector.
-
-		if url.ends_with("|opendeck_property_inspector") {
-			let path = &url[..url.len() - 28];
-			if !matches!(tokio::fs::try_exists(path).await, Ok(true)) {
-				let _ = request.respond(Response::empty(404).with_header(access_control_allow_origin));
-				continue;
-			}
-
-			let mut content = tokio::fs::read_to_string(path).await.unwrap_or_default();
-			inject_property_inspector_theme(&mut content);
-			content += r#"
+const PROPERTY_INSPECTOR_SCRIPT: &str = r#"
 				<div id="opendeck_iframe_container" style="position: absolute; z-index: 100; top: 0; left: 0; width: 100%; height: 100%; display: none;"></div>
 				<script>
 					const opendeck_window_open = window.open;
@@ -179,62 +104,144 @@ pub async fn init_webserver(prefix: PathBuf) {
 				</script>
 			"#;
 
-			let mut response = Response::from_string(content);
-			response.add_header(access_control_allow_origin);
-			response.add_header(Header {
-				field: "Content-Type".parse().unwrap(),
-				value: "text/html".parse().unwrap(),
-			});
-			let _ = request.respond(response);
-		} else if url.ends_with("|opendeck_property_inspector_child") {
-			let path = &url[..url.len() - 34];
-			if !matches!(tokio::fs::try_exists(path).await, Ok(true)) {
-				let _ = request.respond(Response::empty(404).with_header(access_control_allow_origin));
-				continue;
-			}
+fn header(field: &str, value: &str) -> Header {
+	Header {
+		field: field.parse().unwrap(),
+		value: value.parse().unwrap(),
+	}
+}
 
-			let mut content = tokio::fs::read_to_string(path).await.unwrap_or_default();
-			inject_property_inspector_theme(&mut content);
-			content = format!("<script>window.opener ??= window.parent;</script>{content}");
+fn bind_listener() -> Server {
+	let listener = std::net::TcpListener::bind((super::LOOPBACK_HOST, *super::PORT_BASE + 2)).unwrap();
 
-			let mut response = Response::from_string(content);
-			response.add_header(access_control_allow_origin);
-			response.add_header(Header {
-				field: "Content-Type".parse().unwrap(),
-				value: "text/html".parse().unwrap(),
-			});
-			let _ = request.respond(response);
-		} else {
-			if !matches!(tokio::fs::try_exists(&url).await, Ok(true)) {
-				let _ = request.respond(Response::empty(404).with_header(access_control_allow_origin));
-				continue;
-			}
+	#[cfg(windows)]
+	{
+		use std::os::windows::io::AsRawSocket;
+		use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
 
-			let mime_type = mime(&match Path::new(&url).extension() {
-				Some(extension) => extension.to_string_lossy().into_owned(),
-				None => "html".to_owned(),
-			});
+		unsafe { SetHandleInformation(listener.as_raw_socket() as _, HANDLE_FLAG_INHERIT, 0) };
+	}
 
-			let content_type = Header {
-				field: "Content-Type".parse().unwrap(),
-				value: mime_type.parse().unwrap(),
-			};
+	Server::from_listener(listener, None).unwrap()
+}
 
-			if mime_type.starts_with("text/") || mime_type == "image/svg+xml" {
-				let mut response = Response::from_string(tokio::fs::read_to_string(url).await.unwrap_or_default());
-				response.add_header(access_control_allow_origin);
-				response.add_header(content_type);
-				let _ = request.respond(response);
-			} else {
-				let mut response = Response::from_file(match tokio::fs::File::open(url).await {
-					Ok(file) => file.into_std().await,
-					Err(_) => continue,
-				});
-				response.add_header(access_control_allow_origin);
-				response.add_header(content_type);
-				let _ = request.respond(response);
-			}
-		}
+fn respond_daisyui(request: Request) {
+	let mut response = Response::from_string(PROPERTY_INSPECTOR_DAISYUI);
+	response.add_header(header("Content-Type", "text/css; charset=utf-8"));
+	response.add_header(header("Cache-Control", "public, max-age=31536000, immutable"));
+	response.add_header(header("Access-Control-Allow-Origin", "*"));
+	let _ = request.respond(response);
+}
+
+fn respond_not_found(request: Request) {
+	let _ = request.respond(Response::empty(404).with_header(header("Access-Control-Allow-Origin", "*")));
+}
+
+fn respond_html(request: Request, content: String) {
+	let mut response = Response::from_string(content);
+	response.add_header(header("Access-Control-Allow-Origin", "*"));
+	response.add_header(header("Content-Type", "text/html"));
+	let _ = request.respond(response);
+}
+
+/// Serves a property inspector page with the theme and the OpenDeck bridge script injected.
+///
+/// The Svelte frontend cannot call the connectElgatoStreamDeckSocket function on property inspector frames
+/// because they are served from a different origin (this plugin asset webserver).
+/// Instead, we have to inject a script onto all property inspector frames that receives a message
+/// from the Svelte frontend over window.postMessage.
+///
+/// Additionally, Tauri cannot support window.open as seperate Tauri windows have seperate JavaScript contexts.
+/// However, plugin property inspectors expect access to this function.
+/// Instead, we have to inject a replacement window.open implementation that creates an IFrame element
+/// and requests the Svelte frontend to maximise the property inspector.
+async fn respond_property_inspector(request: Request, path: &str) {
+	if !matches!(tokio::fs::try_exists(path).await, Ok(true)) {
+		return respond_not_found(request);
+	}
+
+	let mut content = tokio::fs::read_to_string(path).await.unwrap_or_default();
+	inject_property_inspector_theme(&mut content);
+	content += PROPERTY_INSPECTOR_SCRIPT;
+	respond_html(request, content);
+}
+
+async fn respond_property_inspector_child(request: Request, path: &str) {
+	if !matches!(tokio::fs::try_exists(path).await, Ok(true)) {
+		return respond_not_found(request);
+	}
+
+	let mut content = tokio::fs::read_to_string(path).await.unwrap_or_default();
+	inject_property_inspector_theme(&mut content);
+	content = format!("<script>window.opener ??= window.parent;</script>{content}");
+	respond_html(request, content);
+}
+
+async fn respond_static_file(request: Request, url: String) {
+	if !matches!(tokio::fs::try_exists(&url).await, Ok(true)) {
+		return respond_not_found(request);
+	}
+
+	let mime_type = mime(&match Path::new(&url).extension() {
+		Some(extension) => extension.to_string_lossy().into_owned(),
+		None => "html".to_owned(),
+	});
+	let content_type = header("Content-Type", &mime_type);
+	let access_control_allow_origin = header("Access-Control-Allow-Origin", "*");
+
+	if mime_type.starts_with("text/") || mime_type == "image/svg+xml" {
+		let mut response = Response::from_string(tokio::fs::read_to_string(url).await.unwrap_or_default());
+		response.add_header(access_control_allow_origin);
+		response.add_header(content_type);
+		let _ = request.respond(response);
+		return;
+	}
+
+	let Ok(file) = tokio::fs::File::open(url).await else {
+		return;
+	};
+	let mut response = Response::from_file(file.into_std().await);
+	response.add_header(access_control_allow_origin);
+	response.add_header(content_type);
+	let _ = request.respond(response);
+}
+
+async fn handle_request(request: Request, prefix: &Path) {
+	let mut url = urlencoding::decode(request.url()).unwrap().into_owned();
+	if let Some((path, _)) = url.split_once('?') {
+		url = path.to_owned();
+	}
+	if url == PROPERTY_INSPECTOR_DAISYUI_PATH {
+		return respond_daisyui(request);
+	}
+	#[cfg(target_os = "windows")]
+	let url = url[1..].replace('/', "\\");
+
+	// Ensure the requested path is within the config directory to prevent unrestricted access to the filesystem.
+	let developer = match crate::store::Store::new("settings", prefix, crate::store::Settings::default()) {
+		Ok(store) => store.value.developer,
+		Err(_) => false,
+	};
+	if !developer && !Path::new(&url).starts_with(prefix) {
+		let _ = request.respond(Response::empty(403));
+		return;
+	}
+
+	if let Some(path) = url.strip_suffix("|opendeck_property_inspector") {
+		respond_property_inspector(request, path).await;
+	} else if let Some(path) = url.strip_suffix("|opendeck_property_inspector_child") {
+		respond_property_inspector_child(request, path).await;
+	} else {
+		respond_static_file(request, url).await;
+	}
+}
+
+/// Start a simple webserver to serve files of plugins that run in a browser environment.
+pub async fn init_webserver(prefix: PathBuf) {
+	let server = bind_listener();
+
+	for request in server.incoming_requests() {
+		handle_request(request, &prefix).await;
 	}
 }
 

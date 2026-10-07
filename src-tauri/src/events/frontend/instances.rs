@@ -76,6 +76,39 @@ fn instance_images_dir(context: &ActionContext) -> std::path::PathBuf {
 		.join(format!("{}.{}.{}", context.controller, context.position, context.index))
 }
 
+/// Re-parents the children of a moved container and resets their state images to the action defaults.
+fn rebase_children(instance: &mut ActionInstance, destination: &Context) {
+	let Some(children) = &mut instance.children else {
+		return;
+	};
+	for (index, child) in children.iter_mut().enumerate() {
+		child.context = ActionContext::from_context(destination.clone(), index as u16 + 1);
+		for (i, state) in child.states.iter_mut().enumerate() {
+			let default_image = &child.action.states[i].image;
+			state.image = if default_image.is_empty() { child.action.icon.clone() } else { default_image.clone() };
+		}
+	}
+}
+
+async fn copy_instance_images(old_dir: &std::path::Path, new_dir: &std::path::Path) {
+	let _ = tokio::fs::create_dir_all(new_dir).await;
+	let Ok(files) = old_dir.read_dir() else {
+		return;
+	};
+	for file in files.flatten() {
+		let _ = tokio::fs::copy(file.path(), new_dir.join(file.file_name())).await;
+	}
+}
+
+fn relocate_state_images(instance: &mut ActionInstance, old_dir: &std::path::Path, new_dir: &std::path::Path) {
+	for state in instance.states.iter_mut() {
+		let path = std::path::Path::new(&state.image);
+		if let Ok(relative) = path.strip_prefix(old_dir) {
+			state.image = new_dir.join(relative).to_string_lossy().into_owned();
+		}
+	}
+}
+
 #[command]
 pub async fn move_instance(source: Context, destination: Context, retain: bool) -> Result<Option<ActionInstance>, Error> {
 	if source.controller != destination.controller {
@@ -88,34 +121,13 @@ pub async fn move_instance(source: Context, destination: Context, retain: bool) 
 	let Some(mut new) = src.clone() else {
 		return Ok(None);
 	};
+	let old_dir = instance_images_dir(&new.context);
 	new.context = ActionContext::from_context(destination.clone(), 0);
-	if let Some(children) = &mut new.children {
-		for (index, instance) in children.iter_mut().enumerate() {
-			instance.context = ActionContext::from_context(destination.clone(), index as u16 + 1);
-			for (i, state) in instance.states.iter_mut().enumerate() {
-				if !instance.action.states[i].image.is_empty() {
-					state.image = instance.action.states[i].image.clone();
-				} else {
-					state.image = instance.action.icon.clone();
-				}
-			}
-		}
-	}
+	rebase_children(&mut new, &destination);
 
-	let old_dir = instance_images_dir(&src.as_ref().unwrap().context);
 	let new_dir = instance_images_dir(&new.context);
-	let _ = tokio::fs::create_dir_all(&new_dir).await;
-	if let Ok(files) = old_dir.read_dir() {
-		for file in files.flatten() {
-			let _ = tokio::fs::copy(file.path(), new_dir.join(file.file_name())).await;
-		}
-	}
-	for state in new.states.iter_mut() {
-		let path = std::path::Path::new(&state.image);
-		if path.starts_with(&old_dir) {
-			state.image = new_dir.join(path.strip_prefix(&old_dir).unwrap()).to_string_lossy().into_owned();
-		}
-	}
+	copy_instance_images(&old_dir, &new_dir).await;
+	relocate_state_images(&mut new, &old_dir, &new_dir);
 
 	let dst = get_slot_mut(&destination, &mut locks).await?;
 	if dst.is_some() {
@@ -139,6 +151,42 @@ pub async fn move_instance(source: Context, destination: Context, retain: bool) 
 	Ok(Some(new))
 }
 
+async fn disappear_and_remove_images(instance: &ActionInstance) {
+	let _ = crate::events::outbound::will_appear::will_disappear(instance, true).await;
+	let _ = remove_dir_all(instance_images_dir(&instance.context)).await;
+}
+
+/// Removes a top-level instance together with its children.
+async fn remove_container(instance: &ActionInstance) {
+	let _ = crate::events::outbound::will_appear::will_disappear(instance, true).await;
+	for child in instance.children.iter().flatten() {
+		disappear_and_remove_images(child).await;
+	}
+	let _ = remove_dir_all(instance_images_dir(&instance.context)).await;
+}
+
+/// Removes a child of a container instance. Returns the container's context when
+/// its toggle states changed and the frontend needs to be refreshed.
+async fn remove_child(container: &mut ActionInstance, context: &ActionContext) -> Option<ActionContext> {
+	let children = container.children.as_mut().unwrap();
+	if let Some(index) = children.iter().position(|child| child.context == *context) {
+		disappear_and_remove_images(&children[index]).await;
+		children.remove(index);
+	}
+
+	if container.action.uuid != "opendeck.toggleaction" {
+		return None;
+	}
+	if container.current_state as usize >= children.len() {
+		container.current_state = if children.is_empty() { 0 } else { children.len() as u16 - 1 };
+	}
+	if children.is_empty() {
+		return None;
+	}
+	container.states.pop();
+	Some(container.context.clone())
+}
+
 #[command]
 pub async fn remove_instance(context: ActionContext) -> Result<(), Error> {
 	let mut locks = acquire_locks_mut().await;
@@ -148,34 +196,10 @@ pub async fn remove_instance(context: ActionContext) -> Result<(), Error> {
 	};
 
 	if instance.context == context {
-		let _ = crate::events::outbound::will_appear::will_disappear(instance, true).await;
-		if let Some(children) = &instance.children {
-			for child in children {
-				let _ = crate::events::outbound::will_appear::will_disappear(child, true).await;
-				let _ = remove_dir_all(instance_images_dir(&child.context)).await;
-			}
-		}
-		let _ = remove_dir_all(instance_images_dir(&instance.context)).await;
+		remove_container(instance).await;
 		*slot = None;
-	} else {
-		let children = instance.children.as_mut().unwrap();
-		for (index, instance) in children.iter().enumerate() {
-			if instance.context == context {
-				let _ = crate::events::outbound::will_appear::will_disappear(instance, true).await;
-				let _ = remove_dir_all(instance_images_dir(&instance.context)).await;
-				children.remove(index);
-				break;
-			}
-		}
-		if instance.action.uuid == "opendeck.toggleaction" {
-			if instance.current_state as usize >= children.len() {
-				instance.current_state = if children.is_empty() { 0 } else { children.len() as u16 - 1 };
-			}
-			if !children.is_empty() {
-				instance.states.pop();
-				let _ = update_state(crate::APP_HANDLE.get().unwrap(), instance.context.clone(), &mut locks).await;
-			}
-		}
+	} else if let Some(container_context) = remove_child(instance, &context).await {
+		let _ = update_state(crate::APP_HANDLE.get().unwrap(), container_context, &mut locks).await;
 	}
 
 	save_profile(&context.device, &mut locks).await?;

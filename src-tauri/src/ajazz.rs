@@ -116,28 +116,28 @@ pub async fn reset_devices() {
 	}
 }
 
-async fn init(device: AsyncAjazz, device_id: String) {
-	if AJAZZ_DEVICES.read().await.contains_key(&device_id) {
-		MANAGED_DEVICES.write().await.remove(&device_id);
-		return;
-	}
-
-	let kind = device.kind();
-	let startup_image = kind.boot_logo_size().map(|(width, height)| crate::shared::ImageSize {
-		width: width as u16,
-		height: height as u16,
-	});
-	let device_type = match kind {
+fn opendeck_device_type(kind: Kind) -> u8 {
+	match kind {
 		Kind::Akp153 | Kind::Akp153E | Kind::Akp153R => 2,
 		Kind::Akp815 => 2,
 		Kind::Akp03 | Kind::Akp03E | Kind::Akp03R => 2,
 		Kind::Akp03RRev2 => 2,
 		Kind::Akp05E552A => 7,
-	};
+	}
+}
+
+/// Clears images, applies brightness, flushes and registers the device with OpenDeck.
+/// Returns `false` (after releasing the managed slot) when initialisation fails.
+async fn prepare_device(device: &AsyncAjazz, device_id: &str) -> bool {
+	let kind = device.kind();
+	let startup_image = kind.boot_logo_size().map(|(width, height)| crate::shared::ImageSize {
+		width: width as u16,
+		height: height as u16,
+	});
 	if let Err(error) = device.clear_all_button_images().await {
 		log::warn!("Failed to initialise {device_id}: {error}");
-		MANAGED_DEVICES.write().await.remove(&device_id);
-		return;
+		MANAGED_DEVICES.write().await.remove(device_id);
+		return false;
 	}
 	if let Ok(settings) = crate::store::get_settings()
 		&& let Err(error) = device.set_brightness(settings.value.brightness).await
@@ -146,20 +146,20 @@ async fn init(device: AsyncAjazz, device_id: String) {
 	}
 	if let Err(error) = device.flush().await {
 		log::warn!("Failed to flush initial state for {device_id}: {error}");
-		MANAGED_DEVICES.write().await.remove(&device_id);
-		return;
+		MANAGED_DEVICES.write().await.remove(device_id);
+		return false;
 	}
 	if let Err(error) = crate::events::inbound::devices::register_device(
 		"",
 		crate::events::inbound::PayloadEvent {
 			payload: crate::shared::DeviceInfo {
-				id: device_id.clone(),
+				id: device_id.to_owned(),
 				plugin: String::new(),
 				name: device.product_name.to_owned(),
 				rows: kind.row_count(),
 				columns: kind.column_count(),
 				encoders: kind.encoder_count(),
-				r#type: device_type,
+				r#type: opendeck_device_type(kind),
 				startup_image,
 			},
 		},
@@ -167,13 +167,28 @@ async fn init(device: AsyncAjazz, device_id: String) {
 	.await
 	{
 		log::warn!("Failed to register {device_id}: {error}");
-		MANAGED_DEVICES.write().await.remove(&device_id);
-		return;
+		MANAGED_DEVICES.write().await.remove(device_id);
+		return false;
 	}
+	true
+}
 
-	let reader = device.get_reader();
-	AJAZZ_DEVICES.write().await.insert(device_id.clone(), device.clone());
-	log::info!("Registered {} as {}", device.product_name, device_id);
+async fn dispatch_device_event(device_id: &str, update: Event) {
+	let result = match update {
+		Event::ButtonDown(key) => keypad::key_down(device_id, key).await,
+		Event::ButtonUp(key) => keypad::key_up(device_id, key).await,
+		Event::EncoderTwist(dial, ticks) => encoder::dial_rotate(device_id, dial, ticks.into()).await,
+		Event::EncoderDown(dial) => encoder::dial_press(device_id, "dialDown", dial).await,
+		Event::EncoderUp(dial) => encoder::dial_press(device_id, "dialUp", dial).await,
+	};
+	if let Err(error) = result {
+		log::warn!("Failed to process device event {update:?}: {error}");
+	}
+}
+
+/// Reads input with a bounded timeout and sends a keep-alive every `KEEP_ALIVE_INTERVAL`
+/// until the device fails.
+async fn run_device_loop(device: &AsyncAjazz, reader: &ajazz_sdk::asynchronous::AsyncDeviceStateReader, device_id: &str) {
 	let mut next_keep_alive = Instant::now();
 	loop {
 		if Instant::now() >= next_keep_alive {
@@ -196,18 +211,25 @@ async fn init(device: AsyncAjazz, device_id: String) {
 			}
 		};
 		for update in updates {
-			match match update {
-				Event::ButtonDown(key) => keypad::key_down(&device_id, key).await,
-				Event::ButtonUp(key) => keypad::key_up(&device_id, key).await,
-				Event::EncoderTwist(dial, ticks) => encoder::dial_rotate(&device_id, dial, ticks.into()).await,
-				Event::EncoderDown(dial) => encoder::dial_press(&device_id, "dialDown", dial).await,
-				Event::EncoderUp(dial) => encoder::dial_press(&device_id, "dialUp", dial).await,
-			} {
-				Ok(_) => (),
-				Err(error) => log::warn!("Failed to process device event {update:?}: {error}"),
-			}
+			dispatch_device_event(device_id, update).await;
 		}
 	}
+}
+
+async fn init(device: AsyncAjazz, device_id: String) {
+	if AJAZZ_DEVICES.read().await.contains_key(&device_id) {
+		MANAGED_DEVICES.write().await.remove(&device_id);
+		return;
+	}
+
+	if !prepare_device(&device, &device_id).await {
+		return;
+	}
+
+	let reader = device.get_reader();
+	AJAZZ_DEVICES.write().await.insert(device_id.clone(), device.clone());
+	log::info!("Registered {} as {}", device.product_name, device_id);
+	run_device_loop(&device, &reader, &device_id).await;
 
 	AJAZZ_DEVICES.write().await.remove(&device_id);
 	MANAGED_DEVICES.write().await.remove(&device_id);

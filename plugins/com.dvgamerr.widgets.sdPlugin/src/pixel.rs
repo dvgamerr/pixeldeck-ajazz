@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-#[path = "../../shared/svg_text.rs"]
+#[path = "../../../shared/svg_text.rs"]
 mod svg_text;
 
 pub use svg_text::data_uri;

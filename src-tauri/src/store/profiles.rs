@@ -141,58 +141,13 @@ impl ProfileStores {
 	}
 
 	pub fn update_profile_action_references(&mut self, device: &str, old_id: &str, new_id: Option<&str>) -> Result<(), anyhow::Error> {
-		fn update_instance(instance: &mut ActionInstance, device: &str, old_id: &str, new_id: Option<&str>) -> bool {
-			let mut changed = false;
-			if let Some(settings) = instance.settings.as_object_mut() {
-				let targets_device = settings.get("device").and_then(|value| value.as_str()).is_none_or(|target| target == device);
-				if instance.action.uuid == "com.amansprojects.starterpack.switchprofile" && targets_device && settings.get("profile").and_then(|value| value.as_str()) == Some(old_id) {
-					if let Some(new_id) = new_id {
-						settings.insert("profile".to_owned(), serde_json::Value::String(new_id.to_owned()));
-					} else {
-						settings.remove("profile");
-					}
-					changed = true;
-				}
-				if instance.action.uuid == "com.amansprojects.starterpack.profilepagination"
-					&& let Some(profiles) = settings.get_mut("profiles").and_then(serde_json::Value::as_array_mut)
-				{
-					let mut updated = Vec::with_capacity(profiles.len());
-					for mut profile in profiles.drain(..) {
-						if profile.as_str() == Some(old_id) {
-							changed = true;
-							let Some(new_id) = new_id else { continue };
-							profile = serde_json::Value::String(new_id.to_owned());
-						}
-						if !updated.contains(&profile) {
-							updated.push(profile);
-						}
-					}
-					*profiles = updated;
-				}
-			}
-			if let Some(children) = &mut instance.children {
-				for child in children {
-					changed |= update_instance(child, device, old_id, new_id);
-				}
-			}
-			changed
-		}
-
 		for store in self.stores.values_mut() {
-			let belongs_to_device = store
-				.value
-				.keys
-				.iter()
-				.chain(&store.value.sliders)
-				.flatten()
-				.next()
-				.is_some_and(|instance| instance.context.device == device);
-			if !belongs_to_device {
+			if !profile_belongs_to_device(&store.value, device) {
 				continue;
 			}
 			let mut changed = false;
 			for instance in store.value.keys.iter_mut().chain(&mut store.value.sliders).flatten() {
-				changed |= update_instance(instance, device, old_id, new_id);
+				changed |= update_instance_references(instance, device, old_id, new_id);
 			}
 			if changed {
 				store.save()?;
@@ -212,6 +167,60 @@ impl ProfileStores {
 		}
 		all
 	}
+}
+
+fn profile_belongs_to_device(profile: &Profile, device: &str) -> bool {
+	profile.keys.iter().chain(&profile.sliders).flatten().next().is_some_and(|instance| instance.context.device == device)
+}
+
+/// Points a "switch profile" action at `new_id`, or clears it when `new_id` is `None`.
+fn update_switch_profile_setting(settings: &mut serde_json::Map<String, serde_json::Value>, device: &str, old_id: &str, new_id: Option<&str>) -> bool {
+	let targets_device = settings.get("device").and_then(|value| value.as_str()).is_none_or(|target| target == device);
+	if !targets_device || settings.get("profile").and_then(|value| value.as_str()) != Some(old_id) {
+		return false;
+	}
+	match new_id {
+		Some(new_id) => settings.insert("profile".to_owned(), serde_json::Value::String(new_id.to_owned())),
+		None => settings.remove("profile"),
+	};
+	true
+}
+
+/// Renames or drops `old_id` within a "profile pagination" action's profile list.
+fn update_pagination_setting(settings: &mut serde_json::Map<String, serde_json::Value>, old_id: &str, new_id: Option<&str>) -> bool {
+	let Some(profiles) = settings.get_mut("profiles").and_then(serde_json::Value::as_array_mut) else {
+		return false;
+	};
+	let mut changed = false;
+	let mut updated = Vec::with_capacity(profiles.len());
+	for mut profile in profiles.drain(..) {
+		if profile.as_str() == Some(old_id) {
+			changed = true;
+			let Some(new_id) = new_id else { continue };
+			profile = serde_json::Value::String(new_id.to_owned());
+		}
+		if !updated.contains(&profile) {
+			updated.push(profile);
+		}
+	}
+	*profiles = updated;
+	changed
+}
+
+fn update_instance_references(instance: &mut ActionInstance, device: &str, old_id: &str, new_id: Option<&str>) -> bool {
+	let mut changed = false;
+	if let Some(settings) = instance.settings.as_object_mut() {
+		if instance.action.uuid == "com.amansprojects.starterpack.switchprofile" {
+			changed |= update_switch_profile_setting(settings, device, old_id, new_id);
+		}
+		if instance.action.uuid == "com.amansprojects.starterpack.profilepagination" {
+			changed |= update_pagination_setting(settings, old_id, new_id);
+		}
+	}
+	for child in instance.children.iter_mut().flatten() {
+		changed |= update_instance_references(child, device, old_id, new_id);
+	}
+	changed
 }
 
 fn rename_profile_contents(profile: &mut Profile, new_id: &str, old_images: &std::path::Path, new_images: &std::path::Path) {
