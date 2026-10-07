@@ -31,12 +31,15 @@ jobs:
   lint-app:
     name: Lint app
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/mistweaverco/opendeck-ajazz-ci:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev xdg-utils
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
