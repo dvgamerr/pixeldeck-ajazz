@@ -300,7 +300,7 @@
 	></canvas>
 
 	{#if showLoadingAnimation}
-		<div class="pointer-events-none absolute inset-0 flex items-center justify-center">
+		<div class="pointer-events-none absolute inset-0 flex items-center justify-center" data-testid="key-loading">
 			<LoadingSquares size={resolvedAppearance == "touch" ? 20 : 24} class="text-white/60" />
 		</div>
 	{/if}

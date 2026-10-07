@@ -397,15 +397,15 @@
 		</div>
 		<div class="ml-auto flex flex-wrap items-center justify-end gap-2">
 			{#if loading}
-				<span class="badge badge-outline gap-2"><span class="loading loading-spinner loading-xs"></span>Loading</span>
+				<span class="badge badge-outline gap-2" data-testid="startup-status" data-status="loading"><span class="loading loading-spinner loading-xs"></span>Loading</span>
 			{:else if successMessage}
-				<span class="badge badge-success">Applied &amp; saved</span>
+				<span class="badge badge-success" data-testid="startup-status" data-status="applied">Applied &amp; saved</span>
 			{:else if layers.length && isDirty}
-				<span class="badge badge-warning badge-outline">Unsaved changes</span>
+				<span class="badge badge-warning badge-outline" data-testid="startup-status" data-status="dirty">Unsaved changes</span>
 			{:else if layers.length}
-				<span class="badge badge-success badge-outline">Saved</span>
+				<span class="badge badge-success badge-outline" data-testid="startup-status" data-status="saved">Saved</span>
 			{:else}
-				<span class="badge badge-outline">No images</span>
+				<span class="badge badge-outline" data-testid="startup-status" data-status="empty">No images</span>
 			{/if}
 			<button type="button" class="btn btn-sm" data-testid="startup-add" disabled={loading || layers.length >= MAX_LAYERS} on:click={openFilePicker}>
 				<Plus size="16" weight="bold" />
@@ -424,7 +424,7 @@
 	</header>
 
 	{#if errorMessage}
-		<div role="alert" class="alert alert-error shrink-0">
+		<div role="alert" class="alert alert-error shrink-0" data-testid="startup-error">
 			<span>{errorMessage}</span>
 		</div>
 	{/if}
@@ -437,6 +437,7 @@
 				<!-- svelte-ignore a11y-no-static-element-interactions -->
 				<div
 					bind:this={editorViewport}
+					data-testid="startup-viewport"
 					class="absolute touch-none overflow-visible bg-black"
 					class:cursor-grab={activeLayer && dragPointerId == undefined && resizePointerId == undefined && rotatePointerId == undefined}
 					class:cursor-grabbing={dragPointerId != undefined}

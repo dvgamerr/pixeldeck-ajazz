@@ -71,9 +71,9 @@
 	}}
 />
 
-<section class="flex h-full min-h-0 w-full flex-col bg-base-200/40">
+<section class="flex h-full min-h-0 w-full flex-col bg-base-200/40" data-testid="parent-action-view" data-parent-uuid={parentUuid}>
 	<header class="flex shrink-0 items-center gap-3 border-b border-base-300 bg-base-100 px-5 py-3">
-		<button type="button" class="btn btn-circle btn-ghost btn-sm" aria-label="Back to device" title="Back to device" on:click={closeFlow}>
+		<button type="button" class="btn btn-circle btn-ghost btn-sm" aria-label="Back to device" title="Back to device" data-testid="parent-action-back" on:click={closeFlow}>
 			<ArrowLeft size="19" />
 		</button>
 		<div class={`flex size-10 shrink-0 items-center justify-center rounded-box ${isToggle ? "bg-secondary/10 text-secondary" : "bg-primary/10 text-primary"}`}>
@@ -85,8 +85,8 @@
 		</div>
 		<div class="min-w-0">
 			<div class="flex items-center gap-2">
-				<h1 class="ui-page-title truncate">{isToggle ? "Toggle Action" : "Multi Action"}</h1>
-				<span class="badge badge-neutral badge-sm shrink-0">{children.length} {children.length == 1 ? "action" : "actions"}</span>
+				<h1 data-testid="parent-action-title" class="ui-page-title truncate">{isToggle ? "Toggle Action" : "Multi Action"}</h1>
+				<span data-testid="parent-action-count" class="badge badge-neutral badge-sm shrink-0">{children.length} {children.length == 1 ? "action" : "actions"}</span>
 			</div>
 			<p class="ui-caption ui-muted mt-0.5 truncate">
 				{isToggle ? "Run one action per press, then continue to the next state." : "Run every action in sequence from top to bottom."}
@@ -119,7 +119,7 @@
 				</div>
 			</div>
 
-			<div class="flex flex-col">
+			<div class="flex flex-col" data-testid="parent-action-children">
 				{#each children as instance, index}
 					<div class="grid grid-cols-[2.5rem_minmax(0,1fr)] gap-3">
 						<div class="flex flex-col items-center" aria-hidden="true">
@@ -135,6 +135,8 @@
 						<div
 							class={`group mb-3 flex min-w-0 cursor-pointer items-center rounded-box border bg-base-100 px-3 py-2.5 transition-colors ${$inspectedInstance == instance.context ? "border-primary shadow-sm" : "border-base-300 hover:border-base-content/25 hover:bg-base-100/80"}`}
 							role="button"
+							data-testid="parent-action-child"
+							data-context={instance.context}
 							tabindex="0"
 							aria-pressed={$inspectedInstance == instance.context}
 							on:click|stopPropagation={() => selectInstance(instance)}
@@ -147,7 +149,8 @@
 							</div>
 							<div class="ml-3 min-w-0 flex-1">
 								<div class="flex items-center gap-2">
-									<span class={`badge badge-sm ${isToggle ? "badge-secondary" : "badge-primary"}`}>{isToggle ? `State ${index + 1}` : `Step ${index + 1}`}</span>
+									<span data-testid="parent-action-child-label" class={`badge badge-sm ${isToggle ? "badge-secondary" : "badge-primary"}`}>{isToggle ? `State ${index + 1}` : `Step ${index + 1}`}</span
+									>
 									{#if $inspectedInstance == instance.context}
 										<span class="badge badge-ghost badge-sm">Editing</span>
 									{/if}
@@ -160,6 +163,7 @@
 								class="btn btn-circle btn-ghost btn-sm ml-2 shrink-0 text-base-content/45 opacity-70 hover:bg-error/10 hover:text-error group-hover:opacity-100"
 								aria-label={`Remove ${instance.action.name}`}
 								title="Remove action"
+								data-testid="parent-action-child-remove"
 								on:click|stopPropagation={() => removeInstance(index)}
 							>
 								<Trash size="18" />
@@ -177,6 +181,7 @@
 						</div>
 					</div>
 					<div
+						data-testid="parent-action-dropzone"
 						class={`flex min-h-24 items-center rounded-box border-2 border-dashed px-4 py-3 transition-colors ${dragActive ? "border-primary bg-primary/10" : "border-base-300 bg-base-100/45 hover:border-base-content/30 hover:bg-base-100/70"}`}
 						on:dragenter={() => (dragActive = true)}
 						on:dragleave={(event) => {

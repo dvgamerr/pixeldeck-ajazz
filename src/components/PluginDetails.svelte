@@ -69,7 +69,7 @@
 			<img src={"https://openactionapi.github.io/plugins/icons/" + id + ".png"} alt={details.name} class="size-32 rounded-box object-cover" />
 		</figure>
 		<div class="card-body justify-center">
-			<h2 class="ui-page-title">{details.name}</h2>
+			<h2 class="ui-page-title" data-testid="plugin-details-name">{details.name}</h2>
 			<div class="ui-muted flex items-center gap-2">
 				<span>by</span>
 				<img src={"https://avatars.githubusercontent.com/" + details.repository.split("/")[3]} alt="" class="avatar size-7 rounded-full" />
@@ -79,6 +79,7 @@
 					href={"https://github.com/" + details.repository.split("/")[3]}
 					on:click={() => window.open("https://github.com/" + details.repository.split("/")[3])}
 					class="link link-primary"
+					data-testid="plugin-details-author"
 				>
 					{details.author}
 					{#if details.repository.split("/")[3] != details.author}
@@ -95,19 +96,20 @@
 						on:click={() => invoke("open_url", { url: details.download_url ?? details.repository + "/releases/latest" })}
 						class="btn btn-primary join-item"
 						aria-label="Open latest release"
+						data-testid="plugin-details-open-release"
 					>
 						<ArrowSquareOut size={20} />
 					</button>
 				</div>
 
 				{#if downloadCount}
-					<span class="badge badge-ghost gap-1"><DownloadSimple size={16} />{downloadCount}</span>
+					<span class="badge badge-ghost gap-1" data-testid="plugin-details-downloads"><DownloadSimple size={16} />{downloadCount}</span>
 				{/if}
 			</div>
 		</div>
 	</section>
 
-	<article class="plugin-readme mt-4 rounded-box border border-base-300 bg-base-100 p-4">
+	<article data-testid="plugin-details-readme" class="plugin-readme mt-4 rounded-box border border-base-300 bg-base-100 p-4">
 		{@html readme}
 	</article>
 </Popup>

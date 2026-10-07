@@ -111,22 +111,28 @@
 				<div class="mb-3 flex items-center justify-between">
 					<h3 class="ui-title">Preview</h3>
 					{#if isGifImageSource(stateImage)}
-						<span class="badge badge-primary badge-sm">GIF</span>
+						<span class="badge badge-primary badge-sm" data-testid="instance-editor-gif-badge">GIF</span>
 					{:else}
-						<span class="badge badge-neutral badge-sm">State {state + 1}</span>
+						<span class="badge badge-neutral badge-sm" data-testid="instance-editor-state-badge">State {state + 1}</span>
 					{/if}
 				</div>
 				<button
 					type="button"
 					class="btn mx-auto block h-auto w-full border-0 bg-transparent p-0 shadow-none"
 					aria-label="Choose state image"
+					data-testid="instance-editor-preview-button"
 					on:click={() => fileInput.click()}
 					on:contextmenu={(event) => {
 						event.preventDefault();
 						resetImage();
 					}}
 				>
-					<img src={stateImage} class="mx-auto aspect-square w-full max-w-40 rounded-box border border-base-300 object-cover shadow-sm" alt="State {state + 1} preview" />
+					<img
+						data-testid="instance-editor-preview"
+						src={stateImage}
+						class="mx-auto aspect-square w-full max-w-40 rounded-box border border-base-300 object-cover shadow-sm"
+						alt="State {state + 1} preview"
+					/>
 				</button>
 				<button type="button" on:click={() => fileInput.click()} class="btn btn-primary btn-sm mt-4 w-full" data-testid="instance-editor-choose-image">Choose image</button>
 				<div class="mt-2 grid grid-cols-2 gap-2">
@@ -135,8 +141,8 @@
 				</div>
 				<p class="ui-caption ui-muted mt-3 text-center">Animated GIFs are preserved. Right-click to reset.</p>
 			</aside>
-			<input bind:this={fileInput} type="file" class="hidden" accept="image/*" on:change={onImageFileChange} />
-			<input bind:this={colourInput} type="color" class="sr-only" value="#FFFFFE" on:change={onColourChange} />
+			<input bind:this={fileInput} data-testid="instance-editor-file" type="file" class="hidden" accept="image/*" on:change={onImageFileChange} />
+			<input bind:this={colourInput} data-testid="instance-editor-colour-input" type="color" class="sr-only" value="#FFFFFE" on:change={onColourChange} />
 
 			<div class="flex min-w-0 flex-col gap-4">
 				<section class="ui-surface p-4">
@@ -165,7 +171,7 @@
 					<div class="grid gap-3 sm:grid-cols-2">
 						<label class="form-control sm:col-span-2">
 							<span class="label-text mb-1">Font family</span>
-							<input list="families" bind:value={instance.states[state].family} placeholder="Font family" class="input input-bordered input-sm w-full" />
+							<input data-testid="instance-editor-family" list="families" bind:value={instance.states[state].family} placeholder="Font family" class="input input-bordered input-sm w-full" />
 							<datalist id="families">
 								{#each FONT_FAMILIES as [value, label]}
 									<option {value}>{label}</option>
@@ -174,11 +180,11 @@
 						</label>
 						<label class="form-control">
 							<span class="label-text mb-1">Text colour</span>
-							<input type="color" bind:value={instance.states[state].colour} class="input input-bordered h-9 w-full p-1" />
+							<input data-testid="instance-editor-colour" type="color" bind:value={instance.states[state].colour} class="input input-bordered h-9 w-full p-1" />
 						</label>
 						<label class="form-control">
 							<span class="label-text mb-1">Alignment</span>
-							<select bind:value={instance.states[state].alignment} class="select select-bordered select-sm w-full">
+							<select data-testid="instance-editor-alignment" bind:value={instance.states[state].alignment} class="select select-bordered select-sm w-full">
 								<option value="top">Top</option>
 								<option value="middle">Middle</option>
 								<option value="bottom">Bottom</option>
@@ -190,6 +196,7 @@
 								<button
 									type="button"
 									class="btn btn-sm join-item flex-1 font-bold"
+									data-testid="instance-editor-bold"
 									class:btn-active={bold}
 									aria-pressed={bold}
 									on:click={() => {
@@ -200,6 +207,7 @@
 								<button
 									type="button"
 									class="btn btn-sm join-item flex-1 italic"
+									data-testid="instance-editor-italic"
 									class:btn-active={italic}
 									aria-pressed={italic}
 									on:click={() => {
@@ -210,6 +218,7 @@
 								<button
 									type="button"
 									class="btn btn-sm join-item flex-1 underline"
+									data-testid="instance-editor-underline"
 									class:btn-active={instance.states[state].underline}
 									aria-pressed={instance.states[state].underline}
 									on:click={() => (instance.states[state].underline = !instance.states[state].underline)}>U</button
@@ -218,7 +227,7 @@
 						</div>
 						<label class="form-control">
 							<span class="label-text mb-1">Size</span>
-							<input type="number" min="1" bind:value={instance.states[state].size} class="input input-bordered input-sm w-full" />
+							<input data-testid="instance-editor-size" type="number" min="1" bind:value={instance.states[state].size} class="input input-bordered input-sm w-full" />
 						</label>
 					</div>
 				</section>

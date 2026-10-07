@@ -12,7 +12,7 @@ export type MockOptions = {
 	categories?: Record<string, any>;
 	applications?: string[];
 	/** Pre-populated slots on the first profile of the first device. */
-	seed?: { controller: "Keypad" | "Encoder"; position: number; action: any }[];
+	seed?: { controller: "Keypad" | "Encoder"; position: number; action: any; children?: any[] }[];
 };
 
 export const AKP05_ID = "sd-TEST";
@@ -89,6 +89,13 @@ function installTauriMock(opts: Required<MockOptions>) {
 		applications: [...opts.applications],
 		applicationProfiles: {} as Record<string, any>,
 		renameError: null as string | null,
+		startupProjects: {} as Record<string, any>,
+		/** Commands that reject with the given message instead of running their handler. */
+		failures: {} as Record<string, string>,
+		/** Answers for the native dialogs. */
+		dialogAsk: true as boolean,
+		dialogOpen: null as string | null,
+		buildInfo: "linux x86_64 e2e-mock",
 	};
 
 	const blankProfile = (device: string, id: string) => {
@@ -123,12 +130,18 @@ function installTauriMock(opts: Required<MockOptions>) {
 	for (const slot of opts.seed) {
 		const profileId = state.profileNames[firstDevice]?.[0] ?? "Default";
 		const instance = makeInstance({ device: firstDevice, profile: profileId, controller: slot.controller, position: slot.position }, slot.action);
+		if (slot.children) {
+			instance.children = slot.children.map((child: any, index: number) => ({
+				...makeInstance({ device: firstDevice, profile: profileId, controller: slot.controller, position: slot.position }, child),
+				context: `${firstDevice}.${profileId}.${slot.controller}.${slot.position}.${index + 1}`,
+			}));
+		}
 		slotArray(profileFor(firstDevice, profileId), slot.controller)[slot.position] = instance;
 	}
 
 	const handlers: Record<string, (args: any) => any> = {
 		get_port_base: () => 57116,
-		get_build_info: () => "linux x86_64 e2e-mock",
+		get_build_info: () => state.buildInfo,
 		get_settings: () => JSON.parse(JSON.stringify(state.settings)),
 		set_settings: ({ settings }) => {
 			state.settings = JSON.parse(JSON.stringify(settings));
@@ -170,12 +183,23 @@ function installTauriMock(opts: Required<MockOptions>) {
 		list_plugins: () => JSON.parse(JSON.stringify(state.plugins)),
 		create_instance: ({ context, action }) => {
 			const instance = makeInstance(context, action);
+			const existing = slotArray(profileFor(context.device, context.profile), context.controller)[context.position];
+			if (existing?.children) {
+				// Dropping into a multi/toggle action adds a child instead of replacing the parent.
+				instance.context = `${context.device}.${context.profile}.${context.controller}.${context.position}.${existing.children.length + 1}`;
+				existing.children.push(instance);
+				return JSON.parse(JSON.stringify(instance));
+			}
 			slotArray(profileFor(context.device, context.profile), context.controller)[context.position] = instance;
 			return JSON.parse(JSON.stringify(instance));
 		},
 		remove_instance: ({ context }) => {
 			const parsed = parseContext(context);
-			slotArray(profileFor(parsed.device, parsed.profile), parsed.controller)[parsed.position] = null;
+			const slots = slotArray(profileFor(parsed.device, parsed.profile), parsed.controller);
+			const parent = slots[parsed.position];
+			const child = parent?.children?.findIndex((item: any) => item.context == context) ?? -1;
+			if (child >= 0) parent.children.splice(child, 1);
+			else slots[parsed.position] = null;
 			return null;
 		},
 		move_instance: ({ source, destination, retain }) => {
@@ -204,8 +228,11 @@ function installTauriMock(opts: Required<MockOptions>) {
 		install_plugin: () => null,
 		show_settings_interface: () => null,
 		restart: () => null,
-		get_startup_image_project: () => null,
-		save_startup_image_project: () => null,
+		get_startup_image_project: ({ device }) => JSON.parse(JSON.stringify(state.startupProjects[device] ?? { layers: [] })),
+		save_startup_image_project: ({ device, project }) => {
+			state.startupProjects[device] = JSON.parse(JSON.stringify(project));
+			return null;
+		},
 		set_startup_image: () => null,
 		// Tauri plugins used by the frontend.
 		"plugin:event|listen": ({ event, handler }) => {
@@ -222,9 +249,9 @@ function installTauriMock(opts: Required<MockOptions>) {
 		"plugin:window|set_size": () => null,
 		"plugin:window|inner_size": () => ({ width: 1440, height: 900 }),
 		"plugin:deep-link|get_current": () => null,
-		"plugin:dialog|ask": () => true,
-		"plugin:dialog|message": ({ buttons }) => (buttons === "YesNo" ? "Yes" : "Ok"),
-		"plugin:dialog|open": () => null,
+		"plugin:dialog|ask": () => state.dialogAsk,
+		"plugin:dialog|message": ({ buttons }) => (buttons === "YesNo" ? (state.dialogAsk ? "Yes" : "No") : "Ok"),
+		"plugin:dialog|open": () => state.dialogOpen,
 	};
 
 	const mock = {
@@ -254,6 +281,10 @@ function installTauriMock(opts: Required<MockOptions>) {
 			}
 		},
 		setRenameError: (message: string | null) => (state.renameError = message),
+		fail: (cmd: string, message: string | null) => {
+			if (message === null) delete state.failures[cmd];
+			else state.failures[cmd] = message;
+		},
 		clearUnmatched: () => unmatched.splice(0),
 	};
 	w.__mock = mock;
@@ -273,6 +304,7 @@ function installTauriMock(opts: Required<MockOptions>) {
 		invoke: async (cmd: string, args: any = {}) => {
 			const record = { cmd, args: JSON.parse(JSON.stringify(args ?? {})) };
 			if (!cmd.startsWith("plugin:event|")) calls.push(record);
+			if (state.failures[cmd] !== undefined) throw state.failures[cmd];
 			const handler = handlers[cmd];
 			if (!handler) {
 				unmatched.push(record);
@@ -318,6 +350,10 @@ export class TauriMock {
 	}
 	clearUnmatched(): Promise<void> {
 		return this.page.evaluate(() => void (window as any).__mock.clearUnmatched());
+	}
+	/** Make every future invoke of `cmd` reject with `message` (null restores the handler). */
+	fail(cmd: string, message: string | null): Promise<void> {
+		return this.page.evaluate(([name, m]) => (window as any).__mock.fail(name, m), [cmd, message] as const);
 	}
 	setRenameError(message: string | null): Promise<void> {
 		return this.page.evaluate((m) => (window as any).__mock.setRenameError(m), message);

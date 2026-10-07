@@ -2,7 +2,7 @@
 	import { AKP05_MASK } from "$lib/startupImage";
 </script>
 
-<svg class="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${AKP05_MASK.width} ${AKP05_MASK.height}`} preserveAspectRatio="none" aria-hidden="true">
+<svg data-testid="startup-mask" class="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${AKP05_MASK.width} ${AKP05_MASK.height}`} preserveAspectRatio="none" aria-hidden="true">
 	<defs>
 		<mask id="akp05-startup-layout-mask">
 			<rect width={AKP05_MASK.width} height={AKP05_MASK.height} fill="white" />
