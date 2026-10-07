@@ -2,12 +2,12 @@
 
 Status legend: [ ] todo, [~] in progress, [x] done
 
-## Phase 0 - Baseline  [ ]
-- [ ] 0.1 Create working branch
-- [ ] 0.2 Run frontend verify (format:check, check, lint, bun test, build)
-- [ ] 0.3 Run cargo fmt/clippy/test (src-tauri, ajazz-sdk)
-- [ ] 0.4 `qlty init` + qlty.toml (exclude target, build, .svelte-kit, node_modules, examples)
-- [ ] 0.5 Record qlty smells/metrics/check baseline in docs/QLTY_BASELINE.md
+## Phase 0 - Baseline  [x]
+- [x] 0.1 Create working branch
+- [x] 0.2 Run frontend verify (format:check, check, lint, bun test, build)
+- [x] 0.3 Run cargo fmt/clippy/test (src-tauri, ajazz-sdk)
+- [x] 0.4 `qlty init` + qlty.toml (exclude target, build, .svelte-kit, node_modules, examples)
+- [x] 0.5 Record qlty smells/metrics/check baseline in docs/QLTY_BASELINE.md
 
 ## Phase 1 - Tech debt audit  [ ]
 - [ ] 1.1 Categorise findings (size, duplication, dead code, unwrap, CSS duplication, docs drift)
@@ -37,3 +37,7 @@ Status legend: [ ] todo, [~] in progress, [x] done
 - [ ] 5.2 Docs update, before/after summary
 
 ## Log
+- Baseline: frontend verify green (13 bun tests, svelte-check 0/0). ajazz-sdk 18 tests pass. clippy clean.
+- Baseline note: `cargo fmt --check` reports "Incorrect newline style" locally only because git autocrlf=true gives CRLF working copies (rustfmt.toml wants Unix). Not a code defect.
+- qlty baseline smells: 17 files flagged (complexity: main, initialise_plugin, init_application_watcher, process_incoming_message, handle_input_state_change, renderImage, appear, init_webserver, update_profile_action_references ...; duplication: plugins pixel.rs x2, starterpack main.rs; many-params: curve_to, renderImage).
+- qlty check baseline: shellcheck CRLF in scripts, osv-scanner advisories in Cargo.lock (glib, rustls, unic-*, proc-macro-error), prettier fmt on 3 json/test files, yamllint on ajazz-sdk qa.yaml, rustfmt plugin lacked edition (fixed via root rustfmt.toml).
