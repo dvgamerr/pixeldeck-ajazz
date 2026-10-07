@@ -132,26 +132,27 @@ function sanitizeSvgToDataUrl(text: string, fileName: string): string {
 	return `data:image/svg+xml;base64,${btoa(binary)}`;
 }
 
+const MIME_BY_EXTENSION: Record<string, string> = { png: "image/png", bmp: "image/bmp" };
+
+function normalizeReadResult(result: string, fileName: string, extension: string): string {
+	if (extension == "svg") return sanitizeSvgToDataUrl(result, fileName);
+	const mimeType = MIME_BY_EXTENSION[extension] ?? "image/jpeg";
+	return result.replace(/^data:[^;,]+;base64,/, `data:${mimeType};base64,`);
+}
+
 export function readFile(file: File, extension: string) {
 	return new Promise<string>((resolve, reject) => {
 		const reader = new FileReader();
+		const fail = () => reject(new Error(`${file.name} could not be read`));
 		reader.onload = () => {
-			if (typeof reader.result != "string") {
-				reject(new Error(`${file.name} could not be read`));
-				return;
-			}
+			if (typeof reader.result != "string") return fail();
 			try {
-				if (extension == "svg") {
-					resolve(sanitizeSvgToDataUrl(reader.result, file.name));
-					return;
-				}
-				const mimeType = extension == "png" ? "image/png" : extension == "bmp" ? "image/bmp" : "image/jpeg";
-				resolve(reader.result.replace(/^data:[^;,]+;base64,/, `data:${mimeType};base64,`));
+				resolve(normalizeReadResult(reader.result, file.name, extension));
 			} catch (error) {
 				reject(error);
 			}
 		};
-		reader.onerror = () => reject(new Error(`${file.name} could not be read`));
+		reader.onerror = fail;
 		if (extension == "svg") reader.readAsText(file);
 		else reader.readAsDataURL(file);
 	});
