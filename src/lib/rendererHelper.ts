@@ -35,15 +35,16 @@ export function getImage(image: string | undefined, fallback: string | undefined
 	if (!image) return fallback ? getImage(fallback, undefined) : "/alert.png";
 	if (image.startsWith("opendeck/")) return image.replace("opendeck", "");
 	if (!image.startsWith("data:")) return getWebserverUrl(image);
-	const svgxmlre = /^data:image\/svg\+xml(?!.*?;base64.*?)(?:;[\w=]*)*,(.+)/;
+	const svgxmlre = /^data:image\/svg\+xml(?!.*?;base64.*?)(?:;[\w=]*)*,([\s\S]+)/;
 	const base64re = /^data:image\/(apng|avif|gif|jpeg|png|svg\+xml|webp|bmp|x-icon|tiff);base64,([A-Za-z0-9+/]+={0,2})?/;
 	if (svgxmlre.test(image)) {
 		let svg = (svgxmlre.exec(image) as RegExpExecArray)[1].replace(/;$/, "");
 		try {
 			svg = decodeURIComponent(svg);
-		} finally {
-			image = "data:image/svg+xml," + encodeURIComponent(svg);
+		} catch {
+			// A malformed percent sequence: use the raw markup as-is.
 		}
+		image = "data:image/svg+xml," + encodeURIComponent(svg);
 	}
 	if (base64re.test(image)) {
 		const exec = base64re.exec(image)!;
@@ -144,9 +145,12 @@ async function drawOverlay(context: CanvasRenderingContext2D, canvas: HTMLCanvas
 	const overlay = document.createElement("img");
 	overlay.crossOrigin = "anonymous";
 	overlay.src = source;
-	await new Promise((resolve) => {
-		overlay.onload = resolve;
+	const loaded = await new Promise<boolean>((resolve) => {
+		overlay.onload = () => resolve(true);
+		overlay.onerror = () => resolve(false);
 	});
+	// A missing overlay asset must not block rendering or hold the canvas lock.
+	if (!loaded) return;
 	context.drawImage(overlay, 0, 0, canvas.width, canvas.height);
 }
 
@@ -199,7 +203,11 @@ export async function resizeImage(source: string): Promise<string | undefined> {
 	const image = document.createElement("img");
 	image.crossOrigin = "anonymous";
 	image.src = source;
-	await new Promise((resolve) => (image.onload = resolve));
+	const loaded = await new Promise<boolean>((resolve) => {
+		image.onload = () => resolve(true);
+		image.onerror = () => resolve(false);
+	});
+	if (!loaded) return;
 
 	let xOffset = 0,
 		yOffset = 0;

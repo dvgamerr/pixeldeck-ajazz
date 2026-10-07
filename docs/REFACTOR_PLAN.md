@@ -50,12 +50,13 @@ Status legend: [ ] todo, [~] in progress, [x] done
 - Phase 4 result: 96 Playwright tests (e2e/*.pw.ts) pass, twice-repeat stable. Run: `bun run test:e2e`. Fixed during this: context menu clamp width 128->144, property inspector now stays mounted (hidden class).
 - Phase 5: verify (format, check, lint, bun test 13, build), cargo clippy/test on 4 manifests, Playwright all green. Hardware acceptance (Registered Ajazz AKP05E_552A as sd-<serial>) NOT run - needs a physical device.
 
-## Phase 6 - Unit tests for every function (Playwright)  [~]
+## Phase 6 - Unit tests for every function (Playwright)  [x]
 Scope: all functions under src/lib (TS) and all Svelte component logic. Rust functions cannot be driven by Playwright; they stay on `cargo test` (separate decision).
-- [ ] 6.1 `playwright.unit.config.ts` + `unit/` (node, no browser) and `test:unit` script
-- [ ] 6.2 Pure/store functions in src/lib (node project)
-- [ ] 6.3 DOM/canvas-dependent lib functions (rendererHelper, startupImage, portal, ...) run in browser context
-- [ ] 6.4 Component behaviour gaps not covered by e2e (ParentActionView, NoDevicesDetected, InstanceEditor formatting, StartupImage editor, ReleaseAssetChooser, PluginDetails)
-- [ ] 6.5 Coverage report: list every exported function and its test; fill gaps
-- [ ] 6.6 CI job + docs
+- [x] 6.1 `playwright.unit.config.ts` + `unit/` (node, no browser) and `test:unit` script
+- [x] 6.2 Pure/store functions in src/lib (node project)
+- [x] 6.3 DOM/canvas-dependent lib functions (rendererHelper, startupImage, portal, ...) run in browser context
+- [x] 6.4 Component behaviour gaps not covered by e2e (ParentActionView, NoDevicesDetected, InstanceEditor formatting, StartupImage editor, ReleaseAssetChooser, PluginDetails)
+- [x] 6.5 Coverage report: list every exported function and its test; fill gaps
+- [x] 6.6 CI job + docs
 Note: working tree had uncommitted user edits (product rename in package.json, tauri.conf, etc.) when Phase 6 started; they are left untouched.
+- Phase 6 result: `bun run test:unit` 161 tests (node, no browser, `bun x --bun playwright`), `bun run test:e2e` 407 tests (use --workers=5 while a Rust build is running). Matrix: docs/UNIT_TEST_MATRIX.md, docs/E2E_COVERAGE.md. Rust functions are covered by `cargo test`, not Playwright. Bugs found by the tests and fixed: getImage URIError and newline truncation, drawOverlay/resizeImage never settling on load error, releasesEndpoint trailing slash, unhandled rejection on cross-controller paste. 6.6 CI job for test:unit still to add.

@@ -46,8 +46,8 @@ test.describe("releasesEndpoint", () => {
 		expect(releasesEndpoint("https://github.com/owner/repo").href).toBe("https://api.github.com/repos/owner/repo/releases");
 	});
 
-	test("a trailing slash in the repository URL leaks into the path as a double slash", () => {
-		expect(releasesEndpoint("https://github.com/owner/repo/").pathname).toBe("/repos/owner/repo//releases");
+	test("a trailing slash in the repository URL is ignored", () => {
+		expect(releasesEndpoint("https://github.com/owner/repo/").pathname).toBe("/repos/owner/repo/releases");
 	});
 
 	test("throws on an invalid repository URL", () => {

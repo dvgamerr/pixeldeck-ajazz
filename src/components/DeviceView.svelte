@@ -115,10 +115,15 @@
 	}
 
 	async function handlePaste(source: Context, destination: Context) {
-		let response: ActionInstance = await invoke("move_instance", { source, destination, retain: true });
-		if (response) {
-			(destination.controller == "Encoder" ? profile.sliders : profile.keys)[destination.position] = response;
-			profile = profile;
+		try {
+			const response: ActionInstance = await invoke("move_instance", { source, destination, retain: true });
+			if (response) {
+				(destination.controller == "Encoder" ? profile.sliders : profile.keys)[destination.position] = response;
+				profile = profile;
+			}
+		} catch (error) {
+			// The backend rejects pasting across controller types; leave the slot untouched.
+			console.warn("Paste rejected:", error);
 		}
 	}
 </script>

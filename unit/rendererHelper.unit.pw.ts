@@ -52,10 +52,8 @@ test.describe("getImage", () => {
 		expect(getImage("data:image/svg+xml,%3Csvg%2F%3E", undefined)).toBe("data:image/svg+xml,%3Csvg%2F%3E");
 	});
 
-	// BUG (documented): the try/finally in getImage has no catch, so a malformed percent
-	// sequence makes decodeURIComponent throw out of getImage instead of using the raw text.
-	test("malformed percent-encoding in an SVG data URL currently throws URIError", () => {
-		expect(() => getImage("data:image/svg+xml,<svg>%E0%A4%A</svg>", undefined)).toThrow(URIError);
+	test("malformed percent-encoding in an SVG data URL falls back to the raw text", () => {
+		expect(getImage("data:image/svg+xml,<svg>%E0%A4%A</svg>", undefined)).toBe("data:image/svg+xml," + encodeURIComponent("<svg>%E0%A4%A</svg>"));
 	});
 });
 

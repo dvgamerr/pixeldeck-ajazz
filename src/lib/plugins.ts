@@ -20,7 +20,7 @@ export function isInstallableAsset(asset: { name: string }): boolean {
 export function releasesEndpoint(repository: string): URL {
 	const endpoint = new URL(repository);
 	endpoint.hostname = "api." + endpoint.hostname;
-	endpoint.pathname = "/repos" + endpoint.pathname + "/releases";
+	endpoint.pathname = "/repos" + endpoint.pathname.replace(/\/+$/, "") + "/releases";
 	return endpoint;
 }
 

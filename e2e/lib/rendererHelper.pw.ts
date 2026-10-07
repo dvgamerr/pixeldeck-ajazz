@@ -93,7 +93,6 @@ test.describe("getImage", () => {
 
 	test("an SVG data URL containing a literal percent sign does not throw", async ({ page }) => {
 		// decodeURIComponent throws on a lone '%'; getImage uses try/finally without a catch, so the URIError escapes.
-		test.fail(true, "getImage rethrows URIError for malformed percent-encoding in SVG data URLs (try/finally without catch)");
 		const outcome = await page.evaluate(async (mod) => {
 			const { getImage } = await import(mod);
 			try {
@@ -107,7 +106,6 @@ test.describe("getImage", () => {
 
 	test("a multi-line raw SVG data URL keeps all of its content", async ({ page }) => {
 		// The regex capture group uses `.+`, which stops at the first newline.
-		test.fail(true, "getImage truncates raw SVG data URLs at the first newline");
 		const result = await page.evaluate(async (mod) => {
 			const { getImage } = await import(mod);
 			return decodeURIComponent(getImage('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg">\n<rect/>\n</svg>', undefined).split(",")[1]!);
@@ -475,7 +473,6 @@ test.describe("renderImage overlays and press", () => {
 	test("an overlay that fails to load must not hang the renderer", async ({ page }) => {
 		// drawOverlay awaits overlay.onload only; a missing overlay asset leaves renderImage pending forever
 		// (and any caller holding the CanvasLock stuck).
-		test.fail(true, "drawOverlay never settles when /ok.png fails to load (no onerror handler)");
 		await page.route("**/ok.png", (route) => route.abort());
 		const settled = await page.evaluate(async (mod) => {
 			const { renderImage } = await import(mod);
@@ -552,7 +549,6 @@ test.describe("resizeImage", () => {
 
 	test("an image that cannot be decoded settles instead of hanging", async ({ page }) => {
 		// resizeImage only sets image.onload, so a corrupt file never resolves; InstanceEditor then silently ignores the chosen file.
-		test.fail(true, "resizeImage never settles for an undecodable image (no onerror handler)");
 		const outcome = await page.evaluate(async (mod) => {
 			const { resizeImage } = await import(mod);
 			const settle = resizeImage("data:image/png;base64,QUJDRA==").then(
