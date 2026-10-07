@@ -12,7 +12,8 @@ use tokio::task::block_in_place;
 use tokio::time::sleep;
 
 use crate::{AjazzError, AjazzInput, DeviceState, Event, Kind};
-use crate::device::{handle_input_state_change, Ajazz};
+use crate::device::Ajazz;
+use crate::input_state::handle_input_state_change;
 use crate::hid::list_devices;
 use crate::images::{convert_image_async, convert_image_with_format};
 

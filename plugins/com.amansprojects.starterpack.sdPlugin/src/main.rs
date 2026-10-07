@@ -113,20 +113,47 @@ async fn dial_rotate(
 	}
 }
 
+#[derive(Clone, Copy)]
+enum InstancePhase {
+	Appear,
+	Refresh,
+}
+
+async fn sync_instance(
+	event: PluginEvent,
+	outbound: &mut OutboundEventManager,
+	phase: InstancePhase,
+) -> EventHandlerResult {
+	let PluginEvent {
+		action,
+		context,
+		payload,
+		..
+	} = event;
+	match (action.as_str(), phase) {
+		(audio::ACTION, InstancePhase::Appear) => audio::appear(context, outbound).await,
+		(audio::ACTION, InstancePhase::Refresh) => audio::refresh(context, outbound).await,
+		(profile_pagination::ACTION, InstancePhase::Appear) => {
+			profile_pagination::appear(context, payload.settings, outbound).await
+		}
+		(profile_pagination::ACTION, InstancePhase::Refresh) => {
+			profile_pagination::refresh(context, payload.settings, outbound).await
+		}
+		(system_monitor::ACTION, InstancePhase::Appear) => {
+			system_monitor::appear(context, payload.settings, outbound).await
+		}
+		(system_monitor::ACTION, InstancePhase::Refresh) => {
+			system_monitor::refresh(context, payload.settings, outbound).await
+		}
+		_ => Ok(()),
+	}
+}
+
 async fn will_appear(
 	event: PluginEvent,
 	outbound: &mut OutboundEventManager,
 ) -> EventHandlerResult {
-	match event.action.as_str() {
-		audio::ACTION => audio::appear(event.context, outbound).await,
-		profile_pagination::ACTION => {
-			profile_pagination::appear(event.context, event.payload.settings, outbound).await
-		}
-		system_monitor::ACTION => {
-			system_monitor::appear(event.context, event.payload.settings, outbound).await
-		}
-		_ => Ok(()),
-	}
+	sync_instance(event, outbound, InstancePhase::Appear).await
 }
 
 fn will_disappear(event: PluginEvent) {
@@ -141,16 +168,7 @@ async fn did_receive_settings(
 	event: PluginEvent,
 	outbound: &mut OutboundEventManager,
 ) -> EventHandlerResult {
-	match event.action.as_str() {
-		audio::ACTION => audio::refresh(event.context, outbound).await,
-		profile_pagination::ACTION => {
-			profile_pagination::refresh(event.context, event.payload.settings, outbound).await
-		}
-		system_monitor::ACTION => {
-			system_monitor::refresh(event.context, event.payload.settings, outbound).await
-		}
-		_ => Ok(()),
-	}
+	sync_instance(event, outbound, InstancePhase::Refresh).await
 }
 
 macro_rules! starter_action {
